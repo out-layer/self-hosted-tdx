@@ -177,13 +177,18 @@ if [ -n "$GATEWAY_URL" ]; then
   DEPLOY_GW_FLAG=(--gateway-url "$GATEWAY_URL")
   echo "  gateway-url (per-VM): $GATEWAY_URL"
 fi
+# --disk 20G: the keystore's persistent data is an ENCRYPTED ZFS volume; 1G (the worker's size) is
+# too small to create it + hold the keystore image, so the guest REBOOT-LOOPS at first boot (clean
+# `reboot`, not a panic, right after "Filesystem options: encryption=true, filesystem=Zfs"). Phala
+# deployed the keystore with --disk-size 20G; match it. (--disk is UNmeasured — vCPU+memory drive
+# RTMR0/1, the disk does not — so the app-id/measurements are unchanged vs a 1G deploy.)
 DEPLOY_OUT="$(python3 "$VMM_CLI" --url "$VMM_URL" deploy \
   --name "$APP_NAME" \
   --compose "$HERE/keystore/app-compose.json" \
   --image "$IMAGE_OS" \
   --env-file "$ENVFILE" \
   --kms-url "$KMS_URL" \
-  --vcpu 2 --memory 2G --disk 1G \
+  --vcpu 2 --memory 2G --disk 20G \
   "${DEPLOY_GW_FLAG[@]}" \
   --port "tcp:127.0.0.1:$AGENT_HOST_PORT:8090" \
   --port "tcp:127.0.0.1:$KS_HOST_PORT:8081" 2>&1)"
