@@ -99,17 +99,24 @@ for old in $(python3 "$VMM_CLI" --url "$VMM_URL" lsvm 2>/dev/null | grep -Fw "$A
 done
 
 echo "[3/3] Deploy worker CVM (outbound-only)..."
-# NO explicit --port: vmm already auto-assigns a host port for the guest-agent (8090) from its
-# pool, and worker-ctl.sh discovers it. A FIXED host port (e.g. 9210) collides as soon as a 2nd
-# worker is deployed ("Could not set up host forwarding rule") and the CVM crash-loops at qemu
-# launch. The worker is outbound-only, so it needs no inbound app port.
+# The --port maps the guest-agent (8090) to a host port (logs/measurements via worker-ctl.sh).
+# vmm does NOT auto-map 8090 without it. A FIXED port (e.g. 9210) collides as soon as a 2nd worker
+# is deployed ("Could not set up host forwarding rule" -> qemu crash-loops). So pick a FREE host
+# port per worker; worker-ctl.sh discovers the live port afterwards (vmm may reassign on restart).
+AGENT_HOST_PORT=""
+for p in $(seq 9210 9999); do
+  ss -ltn 2>/dev/null | grep -q "127.0.0.1:$p " || { AGENT_HOST_PORT=$p; break; }
+done
+[ -n "$AGENT_HOST_PORT" ] || { echo "No free host port in 9210-9999 for the agent" >&2; exit 1; }
+echo "  agent host port: $AGENT_HOST_PORT (initial; worker-ctl.sh discovers the live port)"
 DEPLOY_OUT="$(python3 "$VMM_CLI" --url "$VMM_URL" deploy \
   --name "$APP_NAME" \
   --compose "$HERE/worker/app-compose.json" \
   --image "$IMAGE_OS" \
   --env-file "$ENVFILE" \
   --kms-url "$KMS_URL" \
-  --vcpu 2 --memory 4G --disk 60G 2>&1)"
+  --vcpu 1 --memory 1G --disk 1G \
+  --port "tcp:127.0.0.1:$AGENT_HOST_PORT:8090" 2>&1)"
 echo "$DEPLOY_OUT"
 
 # Remove the temp /etc/hosts NOW (before the guest's KMS DNS query), then reboot the CVM so its
