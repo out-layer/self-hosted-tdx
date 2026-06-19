@@ -26,12 +26,13 @@ Bearer token (SHA256 vs `ALLOWED_{WORKER,COORDINATOR}_TOKEN_HASHES`) + a TEE cha
 session (`X-TEE-Session`, bound to the caller's on-chain access key on `worker.outlayer.<net>`).
 nginx needs no auth logic; it only terminates TLS and forwards.
 
-> ⚠️ **Security caveat to decide on (Part 2):** Phala terminates TLS *inside* an attested CVM
-> (gateway). A host nginx terminates TLS *outside* the TEE → decrypted tokens/secrets transit
-> host memory between nginx and the CVM. This is a genuine confidentiality reduction vs Phala —
-> it's the substance of the "keystore migrates last / needs gateway" note. Mitigations: bind the
-> CVM's 8081 to **loopback only** (nginx-only reach), and/or later terminate TLS inside the CVM.
-> For now: accept it as the self-hosted trust model + document loudly. (Decide before mainnet.)
+> ✅ **HARD REQUIREMENT (user, 2026-06-19): keys/plaintext must NEVER leave the TEE.** So a host
+> nginx terminating TLS is **NOT acceptable** for the keystore — it would expose decrypted
+> payloads/tokens in host memory. **TLS must terminate INSIDE an attested CVM**, exactly like
+> Phala's dstack-gateway does. There is no key "migration": the self-hosted keystore re-derives
+> its master in-TEE from MPC CKD; we just point traffic at the new node and turn Phala off. ⇒
+> **Part 2 = run a dstack-gateway CVM** (TEE TLS terminator + router), NOT host TLS termination.
+> (Host nginx is still fine for the *admin UI* in Part 3 — that carries no TEE secrets.)
 
 ---
 
@@ -94,35 +95,49 @@ testnet auto, mainnet print) → poll `/health` until ready. Owner + zavodil key
 
 ---
 
-## Part 2 — nginx ingress: stable domain + TLS + multiple keystores
+## Part 2 — Ingress: dstack-gateway CVM (TLS terminates IN the TEE)
 
-### 2.1 Prereqs (USER provides)
-- DNS: `testnet-keystore.outlayer.ai` (and `mainnet-keystore.outlayer.ai`) A-record → the node's
-  public IP.
-- TLS cert + key for those names (user supplies; or Let's Encrypt via certbot if port 80 reachable).
-- Decide the canonical names (confirm `.outlayer.ai`).
+The keystore must be reached over HTTPS where TLS terminates **inside an attested CVM** (HARD
+REQUIREMENT above). The dstack-native way — and exactly what Phala did — is a **dstack-gateway
+CVM**. We currently run none (`vmm.toml`: `gateway_urls=[]`; workers are outbound-only). Add one
+for the keystore. A host nginx that terminates TLS is explicitly ruled out for keystore traffic.
+
+### 2.1 RESEARCH FIRST (next agent's first ingress task) — confirm the gateway path
+The gateway exists in `meta-dstack/dstack/gateway`. Determine:
+- How to deploy a dstack-gateway as a CVM on our vmm (analogous to the KMS-as-CVM in
+  `30-deploy-kms.sh`); how it registers with the KMS/auth-simple; how to wire `vmm.toml`
+  `gateway_urls=[…]`.
+- Cert/domain model: it serves **RA-TLS** (cert bound to the gateway's TEE attestation) and needs a
+  **wildcard cert** for the gateway domain — obtained how? (user provides, or in-CVM ACME).
+- URL scheme: Phala exposed `https://<app-id>-<port>.<gateway-domain>`. Does it support a **clean
+  custom hostname** (`testnet-keystore.outlayer.ai` → a chosen app CVM:8081), or only `<app-id>-
+  <port>` (then CNAME `testnet-keystore.outlayer.ai` → that host)?
+- How it routes to the keystore CVM:8081 over the vmm network, and how **"switch keystores"** works
+  (re-point the hostname/route at a different keystore app-id).
+- Fallback option **B** (only if a full gateway is impractical): keystore serves RA-TLS itself +
+  host does TCP/**SNI passthrough** (nginx `stream`, no decryption — encrypted bytes only). Default
+  to **A (gateway)** — the faithful Phala model — unless B is clearly simpler and keeps TLS in-TEE.
 
 ### 2.2 Keystore CVM port exposure
-`40-deploy-keystore.sh` maps CVM:8081 → `127.0.0.1:<KS_PORT>` (loopback). Each keystore instance
-gets its own free `<KS_PORT>` (collision-safe, like the worker agent-port finder). NOT WAN-bound —
-nginx is the only public listener.
+The keystore CVM serves plain HTTP 8081 *internally*; the **gateway** terminates TLS and forwards to
+it over the vmm network. Do **not** expose 8081 to the host/WAN in plaintext. (Under option B, the
+keystore's in-CVM TLS port is exposed and the host only passes encrypted bytes through.)
 
-### 2.3 nginx (host) + switch
-- Install nginx on the node. `server { listen 443 ssl; server_name testnet-keystore.outlayer.ai;
-  ssl_certificate/key …; location / { proxy_pass http://127.0.0.1:<KS_PORT>; proxy_set_header … } }`.
-- **Multiple keystores + switch (recommended: active-backend switch).** One canonical URL
-  (`testnet-keystore.outlayer.ai`) whose nginx upstream points at the *active* keystore's
-  `<KS_PORT>`. A `keystore-switch.sh <cvm-name>` rewrites the upstream + `nginx -s reload` —
-  transparent to workers/coordinator (KEYSTORE_BASE_URL unchanged). Keep N keystores running on
-  distinct ports; switch the backend instantly. (Alt: per-keystore subpaths/subdomains if you want
-  to address each by URL — document both, default to active-backend.)
-- `KEYSTORE_BASE_URL=https://testnet-keystore.outlayer.ai` → set in the **execution worker** env
-  (`.env.<net>-worker-tdx`) + given to the coordinator.
-- Firewall (iptables): open 443 WAN; keep vmm(11000)/KMS(11001)/agent ports loopback as today.
+### 2.3 Domain, cert, switch (user: domains = yes)
+- `testnet-keystore.outlayer.ai` (+ `mainnet-keystore.outlayer.ai` later). DNS → node public IP, or
+  CNAME → the gateway's `<app-id>-<port>` host (depends on 2.1).
+- Wildcard/host cert for the gateway domain (user provides, or in-CVM ACME — decide in 2.1).
+- **Switch keystores**: re-point the canonical hostname/route to a different keystore app-id (gateway
+  config), keeping `KEYSTORE_BASE_URL` stable for workers/coordinator. Multiple keystores stay
+  running; flip the route. Document once 2.1 settles the mechanism.
+- `KEYSTORE_BASE_URL=https://testnet-keystore.outlayer.ai` → set in worker `.env.<net>-worker-tdx`
+  + given to the coordinator.
+- Firewall: open the gateway's public 443 (WAN); keep vmm(11000)/KMS(11001)/worker-agent ports
+  loopback as today.
 
 ### 2.4 Mainnet
-Same pattern with `mainnet-keystore.outlayer.ai` → mainnet keystore CVM (if we run a dedicated
-one — see Part 1 open Q).
+Same gateway + `mainnet-keystore.outlayer.ai` → a **dedicated** mainnet keystore (user: yes, after
+testnet). One gateway can serve both nets, or one per net — decide in 2.1.
 
 ---
 
@@ -135,17 +150,16 @@ Small host service (Python stdlib `http.server` or Flask — node has python3) t
 that can reach vmm + read qemu cmdlines (outlayer) on a loopback port.
 
 ### 3.2 Auth + exposure
-nginx `location /admin` (or `admin.outlayer.ai`) with **HTTP Basic auth** (`htpasswd`, the admin
-login/password you set) over 443 → proxy to the loopback UI service. Not reachable without creds.
+Host nginx serving **`workers.outlayer.ai`** (user-confirmed) over 443 with **HTTP Basic auth**
+(`htpasswd`, the admin login/password the user sets) → proxy to the loopback UI service. Not
+reachable without creds. This nginx DOES terminate TLS — fine here, the admin UI carries no TEE
+secrets (only `lsvm` status + worker logs). Keep it a SEPARATE nginx server block from the keystore
+ingress (which must stay TEE-terminated, Part 2).
 
 ### 3.3 Scope
-Start **read-only** (status + logs). Defer destructive actions (restart/stop/remove) — if added
-later, gate behind the same auth + explicit confirm; never expose `remove`.
-
-### Decisions (Part 3)
-- Stack: tiny Python service (recommended, minimal deps) vs Node.
-- Domain/path: `admin.outlayer.ai` vs `testnet-keystore.outlayer.ai/admin`.
-- Read-only vs also actions (recommend read-only v1).
+**Read-only v1** (user-confirmed): status + logs only. Defer destructive actions
+(restart/stop/remove); if ever added, gate behind the same auth + explicit confirm; never expose
+`remove`.
 
 ---
 
@@ -156,15 +170,29 @@ later, gate behind the same auth + explicit confirm; never expose `remove`.
 - `admin-ui.md` — the UI + basic-auth.
 - Update `README.md` + `mainnet-launch.md` (add keystore + ingress steps).
 
-## What I need from you before executing
-1. Confirm domains: `testnet-keystore.outlayer.ai` + `mainnet-keystore.outlayer.ai` (or other).
-2. TLS cert+key for them (or OK to use Let's Encrypt/certbot).
-3. Accept the **TLS-outside-TEE** trust reduction for self-hosted (Part 2 ⚠️), or require in-CVM
-   TLS termination (bigger change).
-4. Mainnet keystore: dedicated self-hosted, or reuse the existing Phala keystore?
-5. Admin UI: read-only OK for v1? domain/path? login/password to set.
-6. Many node changes here (nginx, firewall, new systemd services) hit the safety classifier — you
-   apply them (I prepare exact configs/scripts) or add Bash permission rules so I can.
+## Decisions (user answered 2026-06-19)
+1. Domains **YES**: `testnet-keystore.outlayer.ai`, `mainnet-keystore.outlayer.ai`; admin UI =
+   `workers.outlayer.ai`. User creates DNS + provides cert.
+2. **TLS must terminate INSIDE the TEE** — keys never leave the TEE. ⇒ dstack-gateway CVM (Part 2);
+   host TLS termination is ruled out for keystore traffic. Phala just gets turned off — there is no
+   key migration (the new keystore re-derives its master in-TEE).
+3. Mainnet keystore: **dedicated self-hosted**, after testnet works.
+4. Admin UI: **yes**, at `workers.outlayer.ai` — host nginx + basic-auth is fine (no TEE secrets);
+   read-only v1; user sets login/password.
+5. Node changes (gateway CVM, firewall, admin-UI nginx, systemd): user applies, or adds Bash
+   permission rules so the agent can (classifier-gated).
+
+## Still to research / verify
+- Gateway specifics (Part 2.1): cert source (user wildcard vs in-CVM ACME); URL scheme (custom
+  hostname vs `<app-id>-<port>` + CNAME); routing + the keystore-switch mechanism.
+- ⚠️ **KEY CONTINUITY — verify BEFORE turning Phala off (the real risk, not ingress):** does the
+  self-hosted keystore derive the **same** master via MPC CKD as the Phala keystore, so it can
+  **decrypt secrets already created** under Phala? The CKD master comes from the MPC
+  (`v1.signer-prod.testnet` / `v1.signer`) keyed by the keystore's CKD identity. If that identity is
+  tied to per-CVM measurements, a new keystore gets a **different** master → cannot read old
+  secrets. Confirm the derivation is stable across keystores (read `keystore-dao-contract`
+  `request_key(CKDRequestArgs)` + `keystore-worker` `mpc_ckd::initialize_mpc_keystore`) before
+  relying on "turn Phala off." If it's NOT stable, existing secrets must be re-wrapped — plan that.
 
 ## Execution order (suggested)
 1. Part 1 testnet keystore (deploy + govern, no public URL yet — reachable via loopback for a
