@@ -30,9 +30,16 @@ TAIL="${TAIL:-200}"
 
 vmm() { python3 "$V" --url "$U" "$@"; }
 
-uuid_of() {
-  vmm lsvm 2>/dev/null | grep -w "$NAME" \
-    | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1
+# Resolve $NAME to exactly one uuid. Accept a uuid directly; otherwise match the lsvm **Name**
+# column EXACTLY (not the App ID / VM ID columns — an App ID is shared by all same-version
+# workers, so matching it would be ambiguous). Returns 0/1/many uuids; need_uuid enforces "one".
+uuids_for_name() {
+  case "$NAME" in
+    [0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*) echo "$NAME"; return ;;  # already a uuid
+  esac
+  vmm lsvm 2>/dev/null | sed 's/│/|/g' | awk -F'|' -v want="$NAME" '
+    { name=$4; uuid=$2; gsub(/[[:space:]]/,"",name); gsub(/[[:space:]]/,"",uuid);
+      if (name==want && uuid ~ /^[0-9a-f-]{36}$/) print uuid }'
 }
 
 # Find the agent host port (→ guest 8090) of the LIVE qemu for this uuid.
@@ -47,9 +54,19 @@ agent_port() {
 }
 
 need_uuid() {
-  local u; u=$(uuid_of)
-  [ -n "$u" ] || { echo "No CVM named '$NAME' in lsvm (set NAME=...)" >&2; exit 1; }
-  echo "$u"
+  local uuids n
+  uuids=$(uuids_for_name)
+  n=$(printf '%s' "$uuids" | grep -c .)
+  if [ "$n" -eq 0 ]; then
+    echo "worker-ctl: no CVM named '$NAME' (pass an exact name or uuid; see 'worker-ctl.sh status')" >&2
+    exit 1
+  fi
+  if [ "$n" -gt 1 ]; then
+    echo "worker-ctl: '$NAME' matches multiple CVMs — target one by uuid (NAME=<uuid>):" >&2
+    printf '%s' "$uuids" | sed 's/^/  /' >&2
+    exit 1
+  fi
+  printf '%s' "$uuids"
 }
 
 cmd="${1:-status}"; shift || true

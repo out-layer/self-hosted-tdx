@@ -158,3 +158,35 @@ Use `40-deploy-worker.sh <version>` (rebuilds app-compose + re-encrypts env via 
 `deploy`). A new worker image changes MRTD/RTMR, so its measurements must be re-approved on
 the register-contract (`add_approved_measurements`, owner-signed) before it can register.
 Stop/start does **not** change measurements — only a redeploy with a new image does.
+
+## Measurements, App IDs & reuse (multiple workers)
+
+A worker's **TEE measurement identity** comes from:
+
+| Register | Determined by |
+|----------|---------------|
+| MRTD     | the dstack OS image (≈ worker version) |
+| RTMR0    | the TD hardware config — **vCPU + memory** |
+| RTMR1    | kernel + boot params — **memory** |
+| RTMR2    | stable (app layer) |
+| RTMR3    | the **app-compose hash** = `COMPOSE_NAME` + worker-image digest + env-var **KEYS** + compose flags |
+
+The **App ID** = `sha256(app-compose)[:40]` (the RTMR3 fingerprint). The **VM name/label is NOT
+measured.** Consequences:
+
+- **Same version + same compose + same vCPU/memory, different name → identical measurements →
+  same App ID → the orchestrator's `is_measurements_approved` SKIPS re-approval (reuse).** This is
+  the intended "approve once per (version, compose, resources), run many" behavior.
+- Changing **vCPU/memory** (e.g. 2c/4G → 1c/1G) changes RTMR0/RTMR1; changing the **compose**
+  (COMPOSE_NAME, image version, env KEYS, or flags) changes RTMR3 → new App ID → one re-approval.
+- **A shared App ID across workers is NOT a problem** — it's the reuse mechanism. The workers stay
+  independent: distinct VM uuid, distinct name, and a **distinct per-instance NEAR worker key**
+  (generated on first boot, persisted on that instance's encrypted disk). Each key registers
+  separately on the operator account and claims jobs independently.
+- **But** a shared App ID ⇒ the KMS derives the **same app-key** ⇒ all those workers decrypt the
+  **same env** (same API token, `init-worker` key, keystore token). Fine for replicas of one
+  operator. For workers with **isolated secrets**, give them a distinct compose (→ distinct App ID
+  → a one-time re-approval each).
+
+Targeting a worker: `worker-ctl.sh` resolves by **exact name** (the `Name` column in `status`) or a
+**uuid** — *not* by App ID (an App ID maps to many workers, so it's rejected as ambiguous).
