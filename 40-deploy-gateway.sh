@@ -21,9 +21,19 @@
 # Run as the user that owns the vmm + can read /home/outlayer/gateway-cf-token (outlayer), e.g.:
 #   sudo -u outlayer -H ./40-deploy-gateway.sh
 #
-# Prereqs: dstack-vmm running; per-node KMS deployed; build/images/dstack-0.5.11 present; the
-# gateway container image BUILT and PUSHED to a registry the CVM can pull (see GATEWAY_IMAGE note
-# below); gateway/gateway.env filled (copy from gateway/gateway.env.template).
+# Prereqs (see docs/gateway.md "Prerequisites" for the full list + verification):
+#   - dstack-vmm running; per-node KMS deployed (README steps 3-4); build/images/dstack-0.5.11 present.
+#   - auth-simple PATCHED with the OutLayer customization (README step 4b / kms/apply-auth-simple.sh):
+#       * allowAnyApp:true        -> the gateway's per-deploy app-id boots WITHOUT a KMS allowlist entry
+#                                    (this is why L1 is skipped). Stock auth-simple DENIES it at boot.
+#       * the gatewayAppId field  -> this script auto-sets gatewayAppId in auth-config.json so the
+#                                    keystore can register; stock auth-simple has no such field and
+#                                    drops it, so the keystore reboot-loops "Missing allowed gateway app id".
+#     This script SOFT-CHECKS both below and warns if they're missing.
+#   - the gateway container image registry-pullable (common path: keep the pinned digest in
+#     gateway.env — it's already published; rebuild+push only on a version bump). See GATEWAY_IMAGE note.
+#   - DNS *.SRV_DOMAIN -> PUBLIC_IP gray-cloud; host resolver Cache=no-negative; scoped CF token stashed.
+#   - gateway/gateway.env filled (copy from gateway/gateway.env.template; set per-node SRV_DOMAIN+PUBLIC_IP).
 set -euo pipefail
 
 # Mode: 'prep' (default, NON-mutating — build the app-compose + print the live steps) or 'deploy'
@@ -108,6 +118,23 @@ echo "  guest-agent: host 127.0.0.1:9206 (loopback)"
 echo "  WAN: RPC/WG 0.0.0.0:9202, TLS serving 443; --public-sysinfo DROPPED"
 echo "  OS_IMAGE=$OS_IMAGE  GATEWAY_IMAGE=$GATEWAY_IMAGE"
 echo "  CF token: read from $CF_TOKEN_FILE (value never printed)"
+echo
+
+# --- Soft-check the auth-simple OutLayer patch (README step 4b / kms/apply-auth-simple.sh) ---
+# The gateway runbook depends on it twice: allowAnyApp (the per-deploy gateway app-id boots without a
+# KMS allowlist entry) AND the gatewayAppId field (so the keystore can register with this gateway).
+# Stock auth-simple has neither -> the gateway is denied at boot and/or the keystore reboot-loops.
+# We only WARN (don't hard-fail): the files may live at a non-default path, and prep mode is harmless.
+AUTH_CONFIG="${AUTH_CONFIG:-/home/$NODE_USER/outlayer-kms/auth-config.json}"
+AUTH_INDEX="${AUTH_SIMPLE_INDEX:-$DSTACK/kms/auth-simple/index.ts}"
+if [ -f "$AUTH_INDEX" ] && ! grep -q "allowAnyApp" "$AUTH_INDEX" 2>/dev/null; then
+  echo "WARN: auth-simple index.ts is NOT patched (no allowAnyApp/gatewayAppId): $AUTH_INDEX"
+  echo "      The gateway will be DENIED at boot and the keystore will reboot-loop."
+  echo "      Run README step 4b first:  cd $(dirname "$0")/kms && ./apply-auth-simple.sh"
+fi
+if [ -f "$AUTH_CONFIG" ] && ! grep -q '"allowAnyApp"[[:space:]]*:[[:space:]]*true' "$AUTH_CONFIG" 2>/dev/null; then
+  echo "WARN: $AUTH_CONFIG does not have allowAnyApp=true — run kms/apply-auth-simple.sh (README step 4b)."
+fi
 echo
 
 if [ "$MODE" = bootstrap ]; then
@@ -290,6 +317,9 @@ if [ "$MODE" = deploy ]; then
   # auth-simple — auto-runs on every (re)deploy, so the keystore never needs a manual KMS edit and the
   # value tracks the gateway's (per-deploy) app-id. (auth-simple is boot-auth only; reload doesn't
   # disturb running CVMs.) The gateway app-id is verified by gateway-enabled CVMs via RA-TLS.
+  # NOTE: writing gatewayAppId here only has EFFECT if auth-simple's index.ts is patched (README
+  # step 4b) — stock auth-simple's schema drops unknown keys and never returns gatewayAppId to a
+  # booting CVM. The soft-check near the top of this script warns if the patch is missing.
   AUTH_CONFIG="${AUTH_CONFIG:-/home/$NODE_USER/outlayer-kms/auth-config.json}"
   if [ -f "$AUTH_CONFIG" ]; then
     python3 -c 'import json,sys; p,a=sys.argv[1],sys.argv[2]; d=json.load(open(p)); d["gatewayAppId"]=a; json.dump(d,open(p,"w"),indent=2)' "$AUTH_CONFIG" "$APP_ID" \

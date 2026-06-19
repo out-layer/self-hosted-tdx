@@ -21,7 +21,8 @@ bare-metal TDX host (Ubuntu 24.04, canonical/tdx kernel)
 ├─ Intel SGX/TDX attestation stack: QGS + local PCCS (Intel PCS API key)
 ├─ dstack-vmm  (this node's, e.g. 127.0.0.1:11000 — separate from any other vmm)
 │   ├─ KMS-CVM         (dstack-kms in a CVM; per-node; encrypts worker env)
-│   ├─ gateway-CVM     (internal routing; ZT-HTTPS optional/off)
+│   ├─ keystore-CVM    (MPC custody keys; HTTPS :8081 — gateway-fronted, see docs/gateway.md)
+│   ├─ gateway-CVM     (optional; TEE-terminated HTTPS ingress for the keystore — docs/gateway.md)
 │   └─ worker-CVM      (OutLayer worker; outbound-only; /var/run/dstack.sock)
 └─ auth-simple (host webhook; JSON allowlist of OS image + KMS + worker measurements)
 ```
@@ -116,6 +117,23 @@ The KMS is reachable from CVMs at `https://kms.1022.dstack.org:11001` (`*.1022.d
 = host; the bootstrap domain must match this, as it's the TLS cert CN). No public DNS needed.
 The vmm.toml `kms_urls` already points here.
 
+### Step 4b — apply the OutLayer auth-simple customization (`allowAnyApp` + `gatewayAppId`)
+
+`30-deploy-kms.sh` deploys **stock** auth-simple: every app must be pre-listed under `apps`, and
+there is no `gatewayAppId` field. OutLayer adds a small, idempotent `index.ts` customization that
+(a) lets any app passing TCB + `osImages` boot without a per-`appId` allowlist entry, and (b) adds
+the `gatewayAppId` config field the KMS hands to gateway-enabled CVMs. **Required for the worker
+(avoids re-allowlisting on every redeploy) and a hard prerequisite for the gateway** (the gateway
+runbook in `docs/gateway.md` relies on both — without it the gateway CVM is denied at boot and the
+keystore reboot-loops with "Missing allowed dstack-gateway app id"):
+
+```bash
+cd ~/self-hosted-tdx/kms && ./apply-auth-simple.sh   # patches index.ts + sets allowAnyApp=true + restarts the webhook
+```
+
+See `kms/README.md` for what it changes and the security rationale (single-tenant: the KMS still
+derives a distinct key per app-id, and on-chain registration is still gated by the register-contract).
+
 ## Step 5 — Worker as a CVM (KMS mode, encrypted env)
 
 ```bash
@@ -157,14 +175,20 @@ The worker retries → registers → polls the coordinator → executes tasks.
 | `10-build-dstack.sh` | Build dstack + download guest image (pinned version) |
 | `20-start-vmm.sh` | Install vmm.toml + start dstack-vmm (systemd) |
 | `30-deploy-kms.sh` | auth-simple + KMS-CVM deploy + bootstrap |
+| `kms/apply-auth-simple.sh` | Step 4b: patch auth-simple (`allowAnyApp` + `gatewayAppId`) — idempotent |
 | `40-deploy-worker.sh` | Resolve verifiable digest + deploy worker CVM (KMS mode) |
+| `40-deploy-keystore.sh` | Deploy keystore CVM (KMS mode; gateway mode via `GATEWAY_URL`) |
+| `40-deploy-gateway.sh` | Deploy the dstack-gateway CVM (TEE TLS terminator) — see `docs/gateway.md` |
 | `vmm.toml.template` | Dedicated vmm config (separate ports/CID) |
 | `kms/auth-config.json.template` | auth-simple allowlist (osImages, kms.mrAggregated, apps) |
 | `kms/kms.toml.template` | KMS app config |
-| `gateway/gateway.toml.template` | Gateway config (internal; ZT-HTTPS optional) |
+| `gateway/gateway.env.template` | Gateway deploy-time env (domain, public IP, image digest, mitigations) |
 | `worker/docker-compose.yaml` | Worker CVM compose (image pinned by digest; mounts dstack.sock) |
 | `worker/worker.env.template` | Worker env (non-secret defaults + secret placeholders) |
+| `worker-ctl.sh` | Day-2 ops for any CVM by name (start/stop/restart/logs) |
 | `docs/bios.md` | Dell racadm BIOS commands |
+| `docs/gateway.md` | Gateway ingress runbook (TEE-terminated HTTPS for the keystore) |
+| `docs/cvm-operations.md` | CVM day-2 ops reference |
 
 ## Multi-node rollout
 
