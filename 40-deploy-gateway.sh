@@ -26,6 +26,13 @@
 # below); gateway/gateway.env filled (copy from gateway/gateway.env.template).
 set -euo pipefail
 
+# Mode: 'prep' (default, NON-mutating — build the app-compose + print the live steps) or 'deploy'
+# (prep, then run the LIVE L2 gateway-CVM deploy + clean-DNS reboot). L1 (KMS allowlist) is skipped:
+# auth-simple runs with allowAnyApp, so a new app-id boots without an allowlist entry. L3 (vmm.toml
+# gateway_urls + vmm restart) and L4 (ACME bootstrap) remain operator steps, printed after 'deploy'.
+MODE="${1:-prep}"
+case "$MODE" in prep|deploy) : ;; *) echo "usage: $0 [prep|deploy]" >&2; exit 1 ;; esac
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 NODE_USER="${NODE_USER:-outlayer}"
 DSTACK="${DSTACK:-/home/$NODE_USER/meta-dstack/dstack}"
@@ -212,7 +219,56 @@ echo "   APP ID       : $APP_ID"
 echo "   APP_LAUNCH_TOKEN (needed at deploy): $APP_LAUNCH_TOKEN"
 echo "==================================================================================="
 echo
-echo "NEXT — the following are LIVE MUTATIONS; run them in order as the operator:"
+
+if [ "$MODE" = deploy ]; then
+  # --- L2: LIVE gateway-CVM deploy + clean-DNS reboot (L1 skipped: auth-simple allowAnyApp). ---
+  # Uses the app-compose + .app_env this run just produced (their APP_LAUNCH_TOKEN match, so the
+  # in-CVM prelaunch gate passes). The /etc/hosts dance lets the HOST-side env-encryption reach the
+  # KMS, then is removed so the GUEST resolves $KMS_HOST -> 10.0.2.2 (host) on boot. Mirrors keystore.
+  echo "=== L2: deploying gateway CVM (LIVE) ==="
+  if ss -ltn 2>/dev/null | grep -qE '(:443|:9202) '; then
+    echo "ERROR: :443 or :9202 already in use — aborting"; ss -ltn | grep -E '(:443|:9202) '; exit 1
+  fi
+  GW_HOSTS_MARK=outlayer-tdx-deploy-kms
+  gw_hosts_cleanup(){ sudo sed -i "\|$GW_HOSTS_MARK|d" /etc/hosts 2>/dev/null || true; }
+  trap 'gw_hosts_cleanup; cleanup' EXIT   # combine with the RENDER_DIR cleanup trap
+  gw_hosts_cleanup
+  echo "127.0.0.1 $KMS_HOST # $GW_HOSTS_MARK" | sudo tee -a /etc/hosts >/dev/null
+  echo "  (temp) /etc/hosts: $KMS_HOST -> 127.0.0.1 (host-side KMS env-encryption only)"
+  DEPLOY_OUT="$(python3 "$VMM_CLI" --url "$VMM_RPC" deploy \
+    --name "$APP_NAME" \
+    --app-id "$APP_ID" \
+    --compose "$OUT_COMPOSE" \
+    --env-file "$OUT_APP_ENV" \
+    --kms-url "$KMS_URL" \
+    --image "$OS_IMAGE" \
+    --vcpu "$VCPU" --memory "$MEMORY" --disk "$DISK" \
+    --port "tcp:$GATEWAY_RPC_ADDR:8000" \
+    --port "tcp:$GATEWAY_ADMIN_RPC_ADDR:8001" \
+    --port "tcp:$GUEST_AGENT_ADDR:8090" \
+    --port "udp:$WG_ADDR:51820" \
+    --port "tcp:0.0.0.0:$GATEWAY_SERVING_PORT:443" 2>&1)"
+  echo "$DEPLOY_OUT"
+  gw_hosts_cleanup   # remove BEFORE the guest's KMS DNS query (else slirp hands it 127.0.0.1)
+  VM_ID="$(printf '%s' "$DEPLOY_OUT" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)"
+  [ -n "$VM_ID" ] || { echo "ERROR: no VM id in deploy output — not rebooting"; exit 1; }
+  echo "  VM_ID=$VM_ID — clean-DNS reboot so the guest reaches the KMS at 10.0.2.2..."
+  python3 "$VMM_CLI" --url "$VMM_RPC" stop  -f "$VM_ID" >/dev/null 2>&1 || true
+  python3 "$VMM_CLI" --url "$VMM_RPC" start    "$VM_ID" >/dev/null 2>&1 || true
+  echo "=== lsvm ==="
+  python3 "$VMM_CLI" --url "$VMM_RPC" lsvm
+  echo
+  echo "Gateway CVM deployed (name=$APP_NAME, app-id=$APP_ID). Watch boot:"
+  echo "  NAME=$APP_NAME CONTAINER=dstack-gateway-1 worker-ctl.sh follow"
+  echo "REMAINING live steps (operator):"
+  echo "  L3: set gateway_urls=[\"$MY_URL\"] in /home/$NODE_USER/meta-dstack/build/vmm.toml + restart vmm"
+  echo "  L4: (cd $GW_APP_DIR && env CF_API_TOKEN=\"\$(cat $CF_TOKEN_FILE)\" SRV_DOMAIN=$SRV_DOMAIN \\"
+  echo "        ACME_STAGING=${ACME_STAGING:-no} GATEWAY_ADMIN_RPC_ADDR=127.0.0.1:9203 bash bootstrap-cluster.sh 127.0.0.1:9203)"
+  echo "  L5: redeploy keystore with --gateway + port_policy (see docs/gateway.md)"
+  exit 0
+fi
+
+echo "NEXT — the LIVE MUTATIONS below; run in order as operator (L1 skipped: auth-simple allowAnyApp):"
 echo
 echo "  # (L1) KMS allowlist — add the gateway app to auth-simple so it can boot + get its key."
 echo "  #      Edit $KMSDIR/auth-config.json: add under .apps an entry keyed by the app-id with"
