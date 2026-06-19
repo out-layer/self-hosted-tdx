@@ -70,10 +70,14 @@ export CF_API_TOKEN
 [ -n "$CF_API_TOKEN" ] || { echo "CF token file $CF_TOKEN_FILE is empty"; exit 1; }
 
 # ---- Re-assert the security mitigations regardless of what the env file said (defense in depth) ----
-# C3: admin RPC must be loopback-only on BOTH the host port map AND the in-CVM bind.
+# C3: the admin RPC's WAN protection is the HOST port map 127.0.0.1:9203 (loopback). The IN-CVM bind
+# MUST be 0.0.0.0: with NET_MODE=user (slirp), the host forward delivers to the guest's eth0, NOT its
+# loopback — so binding the admin to the guest's 127.0.0.1 makes it UNREACHABLE (the bootstrap hangs
+# at "Waiting for gateway admin API"). 0.0.0.0 in-guest stays safe because only the host-loopback
+# :9203 forwards to it (identical model to the guest-agent on :9206).
 NET_MODE=user
 GATEWAY_ADMIN_RPC_ADDR=127.0.0.1:9203
-ADMIN_LISTEN_ADDR=127.0.0.1
+ADMIN_LISTEN_ADDR=0.0.0.0
 ADMIN_LISTEN_PORT=8001
 GUEST_AGENT_ADDR=127.0.0.1:9206
 # WAN-facing.
@@ -99,7 +103,7 @@ KMS_HOST="$(printf '%s' "$KMS_URL" | sed -E 's#^https?://([^:/]+).*#\1#')"
 
 echo "=== Mitigations in effect (security review C2/C3/H2/M3) ==="
 echo "  NET_MODE=user (bridge would skip the --port loopback gate)"
-echo "  admin RPC: host 127.0.0.1:9203 + in-CVM ADMIN_LISTEN_ADDR=127.0.0.1 (loopback only)"
+echo "  admin RPC: host 127.0.0.1:9203 (loopback = WAN gate) + in-CVM 0.0.0.0 (slirp reaches eth0, not lo)"
 echo "  guest-agent: host 127.0.0.1:9206 (loopback)"
 echo "  WAN: RPC/WG 0.0.0.0:9202, TLS serving 443; --public-sysinfo DROPPED"
 echo "  OS_IMAGE=$OS_IMAGE  GATEWAY_IMAGE=$GATEWAY_IMAGE"
@@ -240,8 +244,16 @@ if [ "$MODE" = deploy ]; then
   # in-CVM prelaunch gate passes). The /etc/hosts dance lets the HOST-side env-encryption reach the
   # KMS, then is removed so the GUEST resolves $KMS_HOST -> 10.0.2.2 (host) on boot. Mirrors keystore.
   echo "=== L2: deploying gateway CVM (LIVE) ==="
+  # Replace-on-redeploy: vmm allows duplicate VM names, so remove any existing dstack-gateway first
+  # (also frees :443/:9202). Matches the exact name in OUR vmm only — never the workers/kms/MPC node.
+  for old in $(python3 "$VMM_CLI" --url "$VMM_RPC" lsvm 2>/dev/null | grep -Fw "$APP_NAME" \
+      | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'); do
+    echo "  replacing existing $APP_NAME ($old) — stop + remove..."
+    python3 "$VMM_CLI" --url "$VMM_RPC" stop -f "$old" >/dev/null 2>&1 || true
+    python3 "$VMM_CLI" --url "$VMM_RPC" remove "$old" >/dev/null 2>&1 || true
+  done
   if ss -ltn 2>/dev/null | grep -qE '(:443|:9202) '; then
-    echo "ERROR: :443 or :9202 already in use — aborting"; ss -ltn | grep -E '(:443|:9202) '; exit 1
+    echo "ERROR: :443 or :9202 still in use after removing old gateway — aborting"; ss -ltn | grep -E '(:443|:9202) '; exit 1
   fi
   GW_HOSTS_MARK=outlayer-tdx-deploy-kms
   gw_hosts_cleanup(){ sudo sed -i "\|$GW_HOSTS_MARK|d" /etc/hosts 2>/dev/null || true; }

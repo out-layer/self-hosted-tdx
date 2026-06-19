@@ -102,7 +102,7 @@ jq '.gateway_enabled=true | .public_tcbinfo=true | .port_policy={restrict_mode:t
 |---|---|
 | C1 | OS_IMAGE=dstack-0.5.11 + GATEWAY_IMAGE = our digest-pinned `outlayer/dstack-gateway@sha256:…` (never the stale upstream 0.5.5 default, never an un-owned image). |
 | C2 | Host firewall (ufw/iptables): WAN = only 22, 24567 (NEAR P2P) + the gateway's 443 & 9202; keep KMS/auth-simple/vmm/admin/agent loopback. `DEFAULT_FORWARD_POLICY=ACCEPT` or CVM egress breaks. |
-| C3 | `NET_MODE=user` (bridge skips the `--port` gate); admin RPC `127.0.0.1:9203` host map **and** in-CVM `ADMIN_LISTEN_ADDR=127.0.0.1`. The admin RPC is an unauthenticated control plane — never WAN. |
+| C3 | `NET_MODE=user` (bridge skips the `--port` gate); admin RPC host map `127.0.0.1:9203` (loopback = the WAN gate) + in-CVM `ADMIN_LISTEN_ADDR=0.0.0.0` (with slirp the host forward reaches the guest eth0, not its loopback, so an in-CVM `127.0.0.1` bind is unreachable and the bootstrap hangs). Unauthenticated control plane — never WAN. |
 | H1 | Gateway is per-app: don't gateway-enable workers; they stay outbound-only. |
 | H2 | `--public-sysinfo` dropped; `--public-logs` kept (ops tooling needs the loopback `/logs`); keystore `port_policy` forwards ONLY :8081 through the gateway (never :8090). |
 | M3 | CF token scoped to single-zone `Zone.DNS:Edit`+`Zone.Zone:Read`; read from the node file, never committed/echoed; rotate after redeploy/debug. |
