@@ -11,3 +11,12 @@ run/
 images/
 
 worker/.env.*
+keystore/.env.*
+gateway/.env.*
+# generated at deploy (vmm-cli compose --output); never commit
+worker/app-compose.json
+keystore/app-compose.json
+gateway/app-compose.json
+gateway/.app_env
+keystore/keystore.env
+gateway/gateway.env

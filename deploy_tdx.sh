@@ -4,20 +4,25 @@
 #
 # Usage:
 #   ./deploy_tdx.sh worker   [testnet|mainnet] [name] --version <ver>
-#   ./deploy_tdx.sh keystore [testnet|mainnet] [name] --version <ver>   # NOT YET on TDX
+#   ./deploy_tdx.sh keystore [testnet|mainnet] [name] --version <ver>
 #
 # Examples:
 #   ./deploy_tdx.sh worker testnet  worker0135-1 --version 0.1.35
 #   ./deploy_tdx.sh worker mainnet  outlayer-worker-mainnet-0.1.35-1 --version 0.1.35
 #   ./deploy_tdx.sh worker testnet  --version 0.1.35           # name defaults to outlayer-worker-testnet-0.1.35-1
+#   ./deploy_tdx.sh keystore testnet --version 0.1.35          # name defaults to outlayer-keystore-testnet-0.1.35-1
 #
-# This node has no `gh`, so the worker image digest can't be auto-resolved here. Resolve +
-# attest it ONCE on a machine with gh, then pass it (it propagates to 40-deploy-worker.sh):
+# This node has no `gh`, so the image digest can't be auto-resolved here. Resolve + attest it
+# ONCE on a machine with gh, then pass it (it propagates to 40-deploy-{worker,keystore}.sh):
 #   WORKER_DIGEST=sha256:<digest> ./deploy_tdx.sh worker testnet worker0135-1 --version 0.1.35
+# (WORKER_DIGEST carries whichever component's digest you're deploying — worker OR keystore.)
 #
-# The worker env comes from worker/.env.<network>-worker-tdx (gitignored; copy from
-# worker/<network>-worker.env.template and fill secrets). The name (3rd arg) becomes the
-# CVM name (APP_NAME) — worker-ctl.sh then targets it by that name.
+# The env comes from <component>/.env.<network>-<component>-tdx (gitignored; copy from
+# <component>/<network>-<component>.env.template and fill secrets). The name (3rd arg) becomes
+# the CVM name (APP_NAME) — worker-ctl.sh then targets it by that name.
+# NOTE: the keystore deploy only puts the CVM up + self-submits its DAO registration. The DAO
+# governance (owner-approve measurements + zavodil vote) is driven from the Mac by
+# scripts/deploy_tdx.sh keystore, which keeps the owner/voter keys local.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
@@ -63,11 +68,25 @@ case "$COMPONENT" in
     echo "Manage:  NAME=$NAME worker-ctl.sh follow | restart | stop"
     ;;
   keystore)
-    echo "keystore deploy on self-hosted TDX is NOT implemented yet." >&2
-    echo "The keystore needs dstack-gateway ingress (workers are outbound-only and migrate first);" >&2
-    echo "keystore migrates LAST. Use scripts/deploy_phala.sh keystore ... for now." >&2
-    echo "See docs/mainnet-launch.md and the resume plan." >&2
-    exit 2
+    ENVREL="keystore/.env.${NETWORK}-keystore-tdx"
+    [ -f "$HERE/$ENVREL" ] || {
+      echo "Missing $ENVREL" >&2
+      echo "  cp $HERE/keystore/${NETWORK}-keystore.env.template $HERE/$ENVREL  and fill the secrets" >&2
+      exit 1
+    }
+    # COMPOSE_NAME is STABLE per (net, version) -> shared measurements -> approve ONCE per (net,ver).
+    # NAME is the per-instance VM label (lsvm / worker-ctl.sh). Add an index for extra instances.
+    COMPOSE_NAME="outlayer-keystore-${NETWORK}-${DEPLOY_VERSION#v}"
+    : "${NAME:=${COMPOSE_NAME}-1}"
+    echo "Deploy KEYSTORE  net=$NETWORK  vm-label=$NAME  measured-name=$COMPOSE_NAME  version=$VER  env=$ENVREL"
+    if $DRY_RUN; then
+      echo "(dry-run) APP_NAME=$NAME COMPOSE_NAME=$COMPOSE_NAME ENVFILE=$ENVREL $HERE/40-deploy-keystore.sh $VER"
+      exit 0
+    fi
+    APP_NAME="$NAME" COMPOSE_NAME="$COMPOSE_NAME" ENVFILE="$ENVREL" "$HERE/40-deploy-keystore.sh" "$VER"
+    echo "Deployed '$NAME'. First boot self-submits its DAO registration; needs measurement"
+    echo "approval + a DAO vote (see docs). The Mac orchestrator scripts/deploy_tdx.sh handles both."
+    echo "Manage:  NAME=$NAME CONTAINER=dstack-keystore-1 worker-ctl.sh follow | restart | stop"
     ;;
   *)
     echo "unknown component '$COMPONENT' (use: worker | keystore)" >&2; exit 1 ;;

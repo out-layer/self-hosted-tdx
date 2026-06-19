@@ -1,0 +1,52 @@
+# OutLayer keystore — deployed as a dstack CVM on a self-hosted TDX node.
+#
+# - image is pinned BY DIGEST (verifiable, Sigstore-attested release build) so the
+#   app-compose hash (measured into RTMR3) is deterministic. 40-deploy-keystore.sh
+#   rewrites this digest for the chosen --version from the GitHub release.
+# - secrets are NOT here: env VALUES come via `vmm-cli ... --env-file keystore.env`
+#   (encrypted by the per-node KMS + embedded as a ciphertext blob). The compose text
+#   keeps only ${VAR} references, so plaintext secrets never enter the measured compose;
+#   dstack decrypts the env inside the CVM and docker-compose substitutes at runtime.
+# - the keystore is an INBOUND axum HTTP server on 8081 (callers: workers + coordinator).
+#   It authenticates every caller itself (Bearer token + TEE challenge-response), so the
+#   transport in front of it only needs to terminate TLS / route — no auth logic there.
+# - 8081 is exposed by the deploy script via a LOOPBACK host port only (node-local smoke
+#   tests); production traffic arrives over the WireGuard mesh / dstack-gateway, NOT this
+#   port. The compose just declares the container port; the host mapping is set at deploy.
+# - /var/run/dstack.sock is provided by dstack inside the CVM (TDX quotes for registration).
+# - mirrors docker/docker-compose.keystore-phala.yml (single keystore service). No
+#   COMPILATION_MODE / executor knobs — this is the keystore, not the worker.
+
+services:
+  keystore:
+    image: docker.io/outlayer/near-outlayer-keystore@sha256:REPLACE_WITH_RELEASE_DIGEST
+    restart: on-failure:5
+    environment:
+      SERVER_HOST: ${SERVER_HOST}
+      SERVER_PORT: ${SERVER_PORT}
+      NEAR_NETWORK: ${NEAR_NETWORK}
+      NEAR_RPC_URL: ${NEAR_RPC_URL}
+      OFFCHAINVM_CONTRACT_ID: ${OFFCHAINVM_CONTRACT_ID}
+      NEAR_CONTRACT_ID: ${NEAR_CONTRACT_ID}
+      ALLOWED_WORKER_TOKEN_HASHES: ${ALLOWED_WORKER_TOKEN_HASHES}
+      ALLOWED_COORDINATOR_TOKEN_HASHES: ${ALLOWED_COORDINATOR_TOKEN_HASHES}
+      # TEE + DAO registration
+      TEE_MODE: ${TEE_MODE}
+      USE_TEE_REGISTRATION: ${USE_TEE_REGISTRATION}
+      OPERATOR_ACCOUNT_ID: ${OPERATOR_ACCOUNT_ID}
+      KEYSTORE_DAO_CONTRACT: ${KEYSTORE_DAO_CONTRACT}
+      # Init account self-submits the keystore registration (submit_keystore_registration) on boot.
+      INIT_ACCOUNT_ID: ${INIT_ACCOUNT_ID}
+      INIT_ACCOUNT_PRIVATE_KEY: ${INIT_ACCOUNT_PRIVATE_KEY}
+      # MPC CKD (Chain Key Derivation) — the keystore pulls its master after the DAO vote passes.
+      MPC_CONTRACT_ID: ${MPC_CONTRACT_ID}
+      MPC_DOMAIN_ID: ${MPC_DOMAIN_ID}
+      MPC_PUBLIC_KEY: ${MPC_PUBLIC_KEY}
+      # dstack guest socket (TDX quotes). Same path inside the CVM as on Phala.
+      DSTACK_SIMULATOR_ENDPOINT: ${DSTACK_SIMULATOR_ENDPOINT}
+      LOG_MASTER_KEY_HASH: ${LOG_MASTER_KEY_HASH:-false}
+      RUST_LOG: ${RUST_LOG:-info,keystore_worker=debug}
+      # Do NOT set KEYSTORE_MASTER_SECRET — it is incompatible with TEE mode (the master is
+      # derived in-TEE from MPC CKD). Setting it would override the TEE-derived master.
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock:ro
