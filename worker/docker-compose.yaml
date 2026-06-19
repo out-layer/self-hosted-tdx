@@ -45,7 +45,7 @@ services:
       NEARDATA_API_URL: ${NEARDATA_API_URL:-}
       FASTNEAR_API_URL: ${FASTNEAR_API_URL:-}
       START_BLOCK_HEIGHT: ${START_BLOCK_HEIGHT:-0}
-      WASM_CACHE_MAX_SIZE_MB: ${WASM_CACHE_MAX_SIZE_MB:-}
+      WASM_CACHE_MAX_SIZE_MB: ${WASM_CACHE_MAX_SIZE_MB:-100}
       POLL_TIMEOUT_SECONDS: 30
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock:ro
