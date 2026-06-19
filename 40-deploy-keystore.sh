@@ -109,19 +109,24 @@ if ! grep -qF "$HOSTS_MARK" /etc/hosts; then
 fi
 
 echo "[2/3] Build app-compose (measured name=$COMPOSE_NAME; KMS env NOT baked into it)..."
-# Gateway mode: --gateway sets gateway_enabled=true in the app-compose so the CVM joins the
-# dstack-gateway WG mesh. Plain mode: no flag (loopback-only keystore).
-COMPOSE_GW_FLAG=()
+# Gateway mode: --gateway sets gateway_enabled=true (CVM joins the dstack-gateway WG mesh) AND we
+# must DROP --no-instance-id — the gateway's register_cvm rejects an empty instance id (boot fails
+# with `Failed to register CVM ... "instance id is empty"` -> 400 -> reboot-loop), so the CVM needs a
+# real (generated, disk-persisted) instance id. Plain mode: --no-instance-id (single-instance, like
+# the worker; no gateway to register with).
+COMPOSE_MODE_FLAGS=()
 if [ -n "$GATEWAY_URL" ]; then
-  COMPOSE_GW_FLAG=(--gateway)
-  echo "  gateway mode: GATEWAY_URL=$GATEWAY_URL (adding --gateway; will inject port_policy/public_tcbinfo)"
+  COMPOSE_MODE_FLAGS=(--gateway)
+  echo "  gateway mode: GATEWAY_URL=$GATEWAY_URL (adding --gateway; dropping --no-instance-id; will inject port_policy/public_tcbinfo)"
+else
+  COMPOSE_MODE_FLAGS=(--no-instance-id)
 fi
 python3 "$VMM_CLI" --url "$VMM_URL" compose \
   --name "$COMPOSE_NAME" \
   --docker-compose "$RENDERED" \
   --kms \
-  --public-logs --no-instance-id \
-  "${COMPOSE_GW_FLAG[@]}" \
+  --public-logs \
+  "${COMPOSE_MODE_FLAGS[@]}" \
   --env-file "$ENVFILE" \
   --output "$HERE/keystore/app-compose.json"
 
