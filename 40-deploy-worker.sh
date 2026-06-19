@@ -18,7 +18,7 @@ COMPOSE="$HERE/worker/docker-compose.yaml"
 ENVFILE="${ENVFILE:-$HERE/worker/worker.env}"
 [ -f "$ENVFILE" ] || ENVFILE="$HERE/$ENVFILE"
 VMM_CLI="${VMM_CLI:-/opt/mpc/dstack/vmm/src/vmm-cli.py}"   # adjust to your dstack path
-IMAGE_OS="${IMAGE_OS:-dstack-0.5.8}"
+IMAGE_OS="${IMAGE_OS:-dstack-0.5.11}"   # must exist in vmm's image dir (vmm-cli lsimage); affects MRTD/RTMR0-2
 # KMS_URL: where `deploy` fetches the env-encryption pubkey to encrypt --env-file. The KMS CVM
 # maps its API to the host at 127.0.0.1:11001. The cert's SAN is kms.1022.dstack.org (which
 # resolves to 10.0.2.2 — only reachable INSIDE CVMs, NOT from the host), but vmm-cli's KMS client
