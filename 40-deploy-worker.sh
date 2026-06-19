@@ -19,6 +19,12 @@ ENVFILE="${ENVFILE:-$HERE/worker/worker.env}"
 [ -f "$ENVFILE" ] || ENVFILE="$HERE/$ENVFILE"
 VMM_CLI="${VMM_CLI:-/opt/mpc/dstack/vmm/src/vmm-cli.py}"   # adjust to your dstack path
 IMAGE_OS="${IMAGE_OS:-dstack-0.5.8}"
+# KMS_URL: where `deploy` fetches the env-encryption pubkey to encrypt --env-file. The KMS CVM
+# maps its API to the host at 127.0.0.1:11001. The cert's SAN is kms.1022.dstack.org (which
+# resolves to 10.0.2.2 — only reachable INSIDE CVMs, NOT from the host), but vmm-cli's KMS client
+# does not verify TLS, so 127.0.0.1 works directly. Using 127.0.0.1 avoids an /etc/hosts hack that
+# would otherwise pollute the GUESTS' DNS (slirp resolves *.1022.dstack.org via the host resolver).
+KMS_URL="${KMS_URL:-https://127.0.0.1:11001}"
 # APP_NAME  = the CVM's VM LABEL (shown in lsvm, targeted by worker-ctl.sh). Unique per instance.
 # COMPOSE_NAME = the name baked into the MEASURED app-compose (drives the compose hash -> RTMR3 ->
 #   measurements). Keep it STABLE per (network, version) so all instances of a version share the
@@ -69,6 +75,7 @@ python3 "$VMM_CLI" --url "$VMM_URL" deploy \
   --compose "$HERE/worker/app-compose.json" \
   --image "$IMAGE_OS" \
   --env-file "$ENVFILE" \
+  --kms-url "$KMS_URL" \
   --vcpu 2 --memory 4G --disk 60G \
   --port "tcp:127.0.0.1:9210:8090"
 
