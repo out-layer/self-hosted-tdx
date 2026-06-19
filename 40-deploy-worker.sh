@@ -88,21 +88,33 @@ python3 "$VMM_CLI" --url "$VMM_URL" compose \
   --env-file "$ENVFILE" \
   --output "$HERE/worker/app-compose.json"
 
+# Replace-on-redeploy: vmm ALLOWS duplicate VM names, so re-running with the same name would
+# create a SECOND CVM and the reboot/lookup below could target the wrong one. Remove any existing
+# CVM with this exact VM label first. (For multiple concurrent instances, use distinct names.)
+for old in $(python3 "$VMM_CLI" --url "$VMM_URL" lsvm 2>/dev/null | grep -Fw "$APP_NAME" \
+  | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'); do
+  echo "Replacing existing CVM '$APP_NAME' ($old) — stop + remove..."
+  python3 "$VMM_CLI" --url "$VMM_URL" stop -f "$old" >/dev/null 2>&1 || true
+  python3 "$VMM_CLI" --url "$VMM_URL" remove "$old" >/dev/null 2>&1 || true
+done
+
 echo "[3/3] Deploy worker CVM (outbound-only; one host port for the dstack agent/logs)..."
-python3 "$VMM_CLI" --url "$VMM_URL" deploy \
+DEPLOY_OUT="$(python3 "$VMM_CLI" --url "$VMM_URL" deploy \
   --name "$APP_NAME" \
   --compose "$HERE/worker/app-compose.json" \
   --image "$IMAGE_OS" \
   --env-file "$ENVFILE" \
   --kms-url "$KMS_URL" \
   --vcpu 2 --memory 4G --disk 60G \
-  --port "tcp:127.0.0.1:9210:8090"
+  --port "tcp:127.0.0.1:9210:8090" 2>&1)"
+echo "$DEPLOY_OUT"
 
 # Remove the temp /etc/hosts NOW (before the guest's KMS DNS query), then reboot the CVM so its
 # boot resolves $KMS_HOST -> 10.0.2.2 cleanly (the first boot may race the entry and fail KMS).
 # (The EXIT trap still runs cleanup() to remove $RENDERED + re-assert the /etc/hosts removal.)
 hosts_cleanup
-VM_ID="$(python3 "$VMM_CLI" --url "$VMM_URL" lsvm 2>/dev/null | grep -w "$APP_NAME" \
+# Capture the JUST-CREATED VM id from the deploy output — NOT a name lookup (names can collide).
+VM_ID="$(printf '%s' "$DEPLOY_OUT" | grep -oE 'Created VM with ID: [0-9a-f-]+' \
   | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)"
 if [ -n "$VM_ID" ]; then
   echo "Clean-DNS reboot of $APP_NAME ($VM_ID) so the guest reaches the KMS at 10.0.2.2..."
