@@ -62,13 +62,17 @@ fi
 [ -n "$DIGEST" ] || { echo "Could not resolve worker digest for $VERSION — pass WORKER_DIGEST=sha256:..." >&2; exit 1; }
 echo "  worker digest: $DIGEST"
 echo "  verify (on a trusted machine): gh attestation verify oci://docker.io/outlayer/near-outlayer-worker@$DIGEST -R fastnear/near-outlayer"
-sed -i.bak "s|image: docker.io/outlayer/near-outlayer-worker@sha256:.*|image: docker.io/outlayer/near-outlayer-worker@$DIGEST|" "$COMPOSE"
+# Render the compose with the pinned digest into a TEMP file — never mutate the committed
+# docker-compose.yaml (that would dirty the git tree and block `git pull` on the node).
+RENDERED="$(mktemp "${TMPDIR:-/tmp}/outlayer-worker-compose.XXXXXX")"
+sed "s|image: docker.io/outlayer/near-outlayer-worker@sha256:.*|image: docker.io/outlayer/near-outlayer-worker@$DIGEST|" "$COMPOSE" > "$RENDERED"
 
 # --- temporary /etc/hosts so the HOST-side KMS encryption can reach $KMS_HOST (see KMS_URL note).
 #     Removed before the CVM boots so the guest resolves $KMS_HOST -> 10.0.2.2 (host), not 127.0.0.1.
 HOSTS_MARK="outlayer-tdx-deploy-kms"
 hosts_cleanup() { sudo sed -i "\|${HOSTS_MARK}|d" /etc/hosts 2>/dev/null || true; }
-trap hosts_cleanup EXIT
+cleanup() { hosts_cleanup; rm -f "$RENDERED"; }
+trap cleanup EXIT
 if ! grep -qF "$HOSTS_MARK" /etc/hosts; then
   echo "127.0.0.1 $KMS_HOST # $HOSTS_MARK" | sudo tee -a /etc/hosts >/dev/null
   echo "  (temporary) /etc/hosts: $KMS_HOST -> 127.0.0.1 (host-side KMS encryption only)"
@@ -77,7 +81,7 @@ fi
 echo "[2/3] Build app-compose (measured name=$COMPOSE_NAME; KMS env NOT baked into it)..."
 python3 "$VMM_CLI" --url "$VMM_URL" compose \
   --name "$COMPOSE_NAME" \
-  --docker-compose "$COMPOSE" \
+  --docker-compose "$RENDERED" \
   --kms \
   --public-logs --no-instance-id \
   --env-file "$ENVFILE" \
@@ -95,7 +99,8 @@ python3 "$VMM_CLI" --url "$VMM_URL" deploy \
 
 # Remove the temp /etc/hosts NOW (before the guest's KMS DNS query), then reboot the CVM so its
 # boot resolves $KMS_HOST -> 10.0.2.2 cleanly (the first boot may race the entry and fail KMS).
-hosts_cleanup; trap - EXIT
+# (The EXIT trap still runs cleanup() to remove $RENDERED + re-assert the /etc/hosts removal.)
+hosts_cleanup
 VM_ID="$(python3 "$VMM_CLI" --url "$VMM_URL" lsvm 2>/dev/null | grep -w "$APP_NAME" \
   | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)"
 if [ -n "$VM_ID" ]; then
