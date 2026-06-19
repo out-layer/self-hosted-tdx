@@ -1,0 +1,11 @@
+# NEVER commit secrets or node-specific filled configs.
+worker.env
+*.env
+!*.env.template
+auth-config.json
+!auth-config.json.template
+*.key
+*.pem
+certs/
+run/
+images/

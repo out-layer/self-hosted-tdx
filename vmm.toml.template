@@ -1,0 +1,46 @@
+# dstack-vmm config for a self-hosted OutLayer node.
+# Ports/CID range are DELIBERATELY distinct so this vmm never collides with
+# another vmm on the same host (e.g. a NEAR MPC node on :10000 / cid 30000).
+#
+# Place at <vmm-data>/vmm.toml and run: ./dstack-vmm -c vmm.toml
+
+address = "tcp:127.0.0.1:11000"      # this node's vmm RPC/web UI (separate from others).
+                                     # NOTE the `tcp:` prefix — required by dstack v0.5.x;
+                                     # `127.0.0.1:11000` (no scheme) is parsed as a unix path.
+reuse = true
+image_path = "./images"
+run_path = "./run/vm"
+
+[cvm]
+# Our per-node KMS (filled after KMS-CVM is deployed in Step 4). The magic domain
+# *.1022.dstack.org resolves to 10.0.2.2 = the host, as seen from inside CVMs.
+# KMS host port = KMS_RPC_ADDR in dstack-app/.env.simple (we use 0.0.0.0:11001).
+kms_urls = ["https://kms.1022.dstack.org:11001"]
+# No gateway CVM: KMS + worker are exposed via direct vmm port-mapping, and the
+# worker is outbound-only, so we don't run a dstack-gateway.
+gateway_urls = []
+cid_start = 40000                    # distinct CID range
+cid_pool_size = 1000
+max_disk_size = 100
+
+[cvm.port_mapping]
+enabled = true
+address = "127.0.0.1"
+range = [
+    { protocol = "tcp", from = 1, to = 20000 },
+    { protocol = "udp", from = 1, to = 20000 },
+]
+
+[host_api]
+address = "vsock:2"
+port = 11000
+
+# Shared gramine local-key-provider (host 127.0.0.1:3443; CVMs reach it via
+# 10.0.2.2:3443). The KMS-CVM (deployed --local-key-provider) seals its root key
+# through this provider. If this host has no key-provider yet, stand one up first
+# (see the NEAR MPC runbook / dstack gramine-sealing-key-provider) or omit this
+# block to use the KMS's own provider.
+[key_provider]
+enabled = true
+address = "127.0.0.1"
+port = 3443

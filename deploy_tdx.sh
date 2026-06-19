@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Deploy an OutLayer component to the SELF-HOSTED TDX node — same UX as scripts/deploy_phala.sh,
+# but targets our dstack-vmm (CVM) instead of Phala Cloud.
+#
+# Usage:
+#   ./deploy_tdx.sh worker   [testnet|mainnet] [name] --version <ver>
+#   ./deploy_tdx.sh keystore [testnet|mainnet] [name] --version <ver>   # NOT YET on TDX
+#
+# Examples:
+#   ./deploy_tdx.sh worker testnet  worker0135-1 --version 0.1.35
+#   ./deploy_tdx.sh worker mainnet  outlayer-worker-mainnet-0.1.35-1 --version 0.1.35
+#   ./deploy_tdx.sh worker testnet  --version 0.1.35           # name defaults to outlayer-worker-testnet-0.1.35-1
+#
+# The worker env comes from worker/.env.<network>-worker-tdx (gitignored; copy from
+# worker/<network>-worker.env.template and fill secrets). The name (3rd arg) becomes the
+# CVM name (APP_NAME) — worker-ctl.sh then targets it by that name.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+
+DEPLOY_VERSION=""
+DRY_RUN=false
+POSITIONAL_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --version) DEPLOY_VERSION="${2:?--version needs a value}"; shift 2 ;;
+    --dry-run|--info) DRY_RUN=true; shift ;;
+    *) POSITIONAL_ARGS+=("$1"); shift ;;
+  esac
+done
+
+[ "${#POSITIONAL_ARGS[@]}" -ge 1 ] || { echo "Usage: $0 <worker|keystore> [testnet|mainnet] [name] --version <ver>" >&2; exit 1; }
+COMPONENT="${POSITIONAL_ARGS[0]}"
+NETWORK="${POSITIONAL_ARGS[1]:-testnet}"
+NAME="${POSITIONAL_ARGS[2]:-}"
+
+case "$NETWORK" in testnet|mainnet) ;; *) echo "network must be testnet|mainnet (got '$NETWORK')" >&2; exit 1 ;; esac
+[ -n "$DEPLOY_VERSION" ] || { echo "--version <ver> is required (e.g. --version 0.1.35)" >&2; exit 1; }
+VER="v${DEPLOY_VERSION#v}"   # normalize 0.1.35 / v0.1.35 -> v0.1.35
+
+case "$COMPONENT" in
+  worker)
+    ENVREL="worker/.env.${NETWORK}-worker-tdx"
+    [ -f "$HERE/$ENVREL" ] || {
+      echo "Missing $ENVREL" >&2
+      echo "  cp $HERE/worker/${NETWORK}-worker.env.template $HERE/$ENVREL  and fill the secrets" >&2
+      exit 1
+    }
+    : "${NAME:=outlayer-worker-${NETWORK}-${DEPLOY_VERSION#v}-1}"
+    echo "Deploy WORKER  net=$NETWORK  name=$NAME  version=$VER  env=$ENVREL"
+    if $DRY_RUN; then
+      echo "(dry-run) APP_NAME=$NAME ENVFILE=$ENVREL $HERE/40-deploy-worker.sh $VER"
+      exit 0
+    fi
+    APP_NAME="$NAME" ENVFILE="$ENVREL" "$HERE/40-deploy-worker.sh" "$VER"
+    echo "Deployed '$NAME'. First boot needs measurement approval (see docs/cvm-operations.md)."
+    echo "Manage:  NAME=$NAME worker-ctl.sh follow | restart | stop"
+    ;;
+  keystore)
+    echo "keystore deploy on self-hosted TDX is NOT implemented yet." >&2
+    echo "The keystore needs dstack-gateway ingress (workers are outbound-only and migrate first);" >&2
+    echo "keystore migrates LAST. Use scripts/deploy_phala.sh keystore ... for now." >&2
+    echo "See docs/mainnet-launch.md and the resume plan." >&2
+    exit 2
+    ;;
+  *)
+    echo "unknown component '$COMPONENT' (use: worker | keystore)" >&2; exit 1 ;;
+esac

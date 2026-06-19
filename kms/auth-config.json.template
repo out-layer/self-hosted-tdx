@@ -1,0 +1,16 @@
+{
+  "_comment": "auth-simple allowlist for the per-node dstack KMS (config-based authorization). Runs as a host webhook; the KMS-CVM and app-CVMs call it on boot. Fill the placeholders during deploy: osImages = the dstack guest OS image hash (from the guest image digest.txt / metadata); kms.mrAggregated = the KMS-CVM measurement CAPTURED at bootstrap (Onboard.GetAttestationInfo); apps = the worker app-compose hash(es) once known. See dstack/docs/auth-simple-operations.md.",
+
+  "osImages": ["0x<DSTACK_OS_IMAGE_HASH>"],
+
+  "kms": {
+    "mrAggregated": ["0x<KMS_CVM_MEASUREMENT_CAPTURED_AT_BOOTSTRAP>"]
+  },
+
+  "apps": {
+    "_comment": "One entry per app (the OutLayer worker). compose-hash gates which app-compose the KMS will release keys to.",
+    "<WORKER_APP_ID>": {
+      "composeHashes": ["0x<WORKER_APP_COMPOSE_HASH>"]
+    }
+  }
+}
