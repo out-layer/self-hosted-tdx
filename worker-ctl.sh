@@ -74,19 +74,24 @@ cmd="${1:-status}"; shift || true
 if [ "${1:-}" ] && [[ "${1:-}" != -* ]]; then NAME="$1"; shift; fi
 # pick the app-log container from the CVM name (compose project 'dstack'): kms -> dstack-kms-1
 [ -n "$CONTAINER" ] || case "$NAME" in *kms*) CONTAINER=dstack-kms-1;; *) CONTAINER=dstack-worker-1;; esac
+# Resolve the target uuid up front for every subcommand except status — and propagate a
+# resolution failure (need_uuid's `exit` inside $() would otherwise be swallowed, leaving an
+# empty uuid that agent_port matches to the first qemu). `|| exit 1` stops cleanly on error.
+case "$cmd" in status|ls|'') : ;; *) u=$(need_uuid) || exit 1 ;; esac
+
 case "$cmd" in
   status|ls)  vmm lsvm ;;
-  info)       vmm info "$(need_uuid)" ;;
-  uuid)       need_uuid ;;
-  port)       p=$(agent_port "$(need_uuid)"); echo "${p:-<no live qemu / not started>}" ;;
-  logs)       u=$(need_uuid); p=$(agent_port "$u"); [ -n "${p:-}" ] || { echo "no agent port (VM not running?)" >&2; exit 1; }
+  info)       vmm info "$u" ;;
+  uuid)       echo "$u" ;;
+  port)       p=$(agent_port "$u"); echo "${p:-<no live qemu / not started>}" ;;
+  logs)       p=$(agent_port "$u"); [ -n "${p:-}" ] || { echo "no agent port (VM not running?)" >&2; exit 1; }
               curl -s  "http://127.0.0.1:$p/logs/$CONTAINER?text=true&bare=true&tail=$TAIL" ;;
-  follow|f)   u=$(need_uuid); p=$(agent_port "$u"); [ -n "${p:-}" ] || { echo "no agent port (VM not running?)" >&2; exit 1; }
+  follow|f)   p=$(agent_port "$u"); [ -n "${p:-}" ] || { echo "no agent port (VM not running?)" >&2; exit 1; }
               curl -sN "http://127.0.0.1:$p/logs/$CONTAINER?text=true&bare=true&follow=true&tail=$TAIL" ;;
-  serial)     vmm logs -n "$TAIL" "$(need_uuid)" ;;   # qemu serial console (boot/system, not app)
-  stop)       vmm stop -f "$(need_uuid)" ;;
-  start)      vmm start "$(need_uuid)" ;;
-  restart)    u=$(need_uuid); vmm stop -f "$u"; vmm start "$u"; echo "restarted $NAME ($u) — re-run '$0 follow' to watch (port changed)" ;;
-  remove|rm)  u=$(need_uuid); vmm stop -f "$u" >/dev/null 2>&1 || true; vmm remove "$u" && echo "REMOVED $NAME ($u) — CVM + disk deleted (gone from lsvm; not recoverable)" ;;
+  serial)     vmm logs -n "$TAIL" "$u" ;;   # qemu serial console (boot/system, not app)
+  stop)       vmm stop -f "$u" ;;
+  start)      vmm start "$u" ;;
+  restart)    vmm stop -f "$u"; vmm start "$u"; echo "restarted $NAME ($u) — re-run '$0 follow' to watch (port changed)" ;;
+  remove|rm)  vmm stop -f "$u" >/dev/null 2>&1 || true; vmm remove "$u" && echo "REMOVED $NAME ($u) — CVM + disk deleted (gone from lsvm; not recoverable)" ;;
   *) echo "usage: $0 <status|info|uuid|port|logs|follow|serial|stop|start|restart|remove> [cvm-name]" >&2; exit 1 ;;
 esac
