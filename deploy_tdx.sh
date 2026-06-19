@@ -79,11 +79,15 @@ case "$COMPONENT" in
     COMPOSE_NAME="outlayer-keystore-${NETWORK}-${DEPLOY_VERSION#v}"
     : "${NAME:=${COMPOSE_NAME}-1}"
     echo "Deploy KEYSTORE  net=$NETWORK  vm-label=$NAME  measured-name=$COMPOSE_NAME  version=$VER  env=$ENVREL"
+    # GATEWAY_URL (optional, forwarded from the Mac orchestrator's --gateway-url): when set, the
+    # keystore deploys gateway-enabled (joins the dstack-gateway WG mesh -> public HTTPS). Unset ->
+    # plain loopback-only keystore. 40-deploy-keystore.sh keys gateway mode off this var.
+    GATEWAY_URL="${GATEWAY_URL:-}"
     if $DRY_RUN; then
-      echo "(dry-run) APP_NAME=$NAME COMPOSE_NAME=$COMPOSE_NAME ENVFILE=$ENVREL $HERE/40-deploy-keystore.sh $VER"
+      echo "(dry-run) APP_NAME=$NAME COMPOSE_NAME=$COMPOSE_NAME ENVFILE=$ENVREL GATEWAY_URL=${GATEWAY_URL:-<none>} $HERE/40-deploy-keystore.sh $VER"
       exit 0
     fi
-    APP_NAME="$NAME" COMPOSE_NAME="$COMPOSE_NAME" ENVFILE="$ENVREL" "$HERE/40-deploy-keystore.sh" "$VER"
+    APP_NAME="$NAME" COMPOSE_NAME="$COMPOSE_NAME" ENVFILE="$ENVREL" GATEWAY_URL="$GATEWAY_URL" "$HERE/40-deploy-keystore.sh" "$VER"
     echo "Deployed '$NAME'. First boot self-submits its DAO registration; needs measurement"
     echo "approval + a DAO vote (see docs). The Mac orchestrator scripts/deploy_tdx.sh handles both."
     echo "Manage:  NAME=$NAME CONTAINER=dstack-keystore-1 worker-ctl.sh follow | restart | stop"

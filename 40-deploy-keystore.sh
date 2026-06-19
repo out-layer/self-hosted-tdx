@@ -15,10 +15,28 @@
 #   - the keystore is an INBOUND server: in addition to the loopback agent port (logs), it
 #     maps a LOOPBACK host port -> guest 8081 for node-local smoke tests. Production traffic
 #     reaches 8081 over the WG mesh / dstack-gateway, NOT via this loopback port.
+#
+# GATEWAY MODE (optional): set GATEWAY_URL to join the keystore to the dstack-gateway WG mesh so
+# it gets a public HTTPS endpoint https://<keystore-app-id>-8081.<gateway-domain> (TLS terminates
+# inside the attested gateway). When GATEWAY_URL is set this script:
+#   1. adds --gateway to `vmm-cli compose` (sets gateway_enabled=true in the app-compose),
+#   2. jq-injects public_tcbinfo=true + port_policy (restrict_mode, ONLY :8081) into the
+#      app-compose AFTER compose + BEFORE deploy (no CLI flag exists for these — H2),
+#   3. adds --gateway-url "$GATEWAY_URL" to `vmm-cli deploy` (per-VM gateway URL; we do NOT touch
+#      vmm.toml — restarting the vmm kills every CVM on the node).
+# Both edits CHANGE the app-id/measurements vs plain mode — that is correct: the PROD keystore IS
+# the gateway-enabled one, and it is what gets its measurements approved. The loopback :8081 host
+# port + --public-logs are kept (node-local /health smoke test + ops /logs); the port_policy makes
+# the guest-agent :8090 unreachable THROUGH the gateway.
+# Example:
+#   GATEWAY_URL=https://gateway.dstack.outlayer.ai:9202 ./40-deploy-keystore.sh v0.1.35
 set -euo pipefail
 
 VERSION="${1:?usage: 40-deploy-keystore.sh <version> [vmm-url]}"
 VMM_URL="${2:-${VMM_URL:-http://127.0.0.1:11000}}"
+# GATEWAY_URL (optional): per-VM dstack-gateway URL, e.g. https://gateway.dstack.outlayer.ai:9202.
+# Set -> gateway mode (public HTTPS via the TEE gateway WG mesh). Unset -> plain mode (loopback only).
+GATEWAY_URL="${GATEWAY_URL:-}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 COMPOSE="$HERE/keystore/docker-compose.yaml"
 # ENVFILE: per-network secrets file (gitignored). Override for testnet/mainnet, e.g.
@@ -91,13 +109,36 @@ if ! grep -qF "$HOSTS_MARK" /etc/hosts; then
 fi
 
 echo "[2/3] Build app-compose (measured name=$COMPOSE_NAME; KMS env NOT baked into it)..."
+# Gateway mode: --gateway sets gateway_enabled=true in the app-compose so the CVM joins the
+# dstack-gateway WG mesh. Plain mode: no flag (loopback-only keystore).
+COMPOSE_GW_FLAG=()
+if [ -n "$GATEWAY_URL" ]; then
+  COMPOSE_GW_FLAG=(--gateway)
+  echo "  gateway mode: GATEWAY_URL=$GATEWAY_URL (adding --gateway; will inject port_policy/public_tcbinfo)"
+fi
 python3 "$VMM_CLI" --url "$VMM_URL" compose \
   --name "$COMPOSE_NAME" \
   --docker-compose "$RENDERED" \
   --kms \
   --public-logs --no-instance-id \
+  "${COMPOSE_GW_FLAG[@]}" \
   --env-file "$ENVFILE" \
   --output "$HERE/keystore/app-compose.json"
+
+# Gateway mode: vmm-cli compose has NO flag for port_policy / public_tcbinfo (H2), so inject them
+# into the app-compose AFTER compose and BEFORE deploy (jq -> temp -> mv back, like 40-deploy-
+# gateway.sh patches its compose). This restricts gateway-exposed ports to ONLY :8081 (never the
+# guest-agent :8090 logs) and publishes the TCB info the gateway needs to route by app-id. This
+# CHANGES the app-id/measurements — expected + correct: the prod keystore IS this gateway-enabled
+# compose, and these are the measurements that get approved.
+if [ -n "$GATEWAY_URL" ]; then
+  KS_COMPOSE="$HERE/keystore/app-compose.json"
+  KS_COMPOSE_TMP="$(mktemp "${TMPDIR:-/tmp}/outlayer-keystore-compose-gw.XXXXXX")"
+  jq '.public_tcbinfo=true | .port_policy={restrict_mode:true, ports:[{port:8081}]}' \
+    "$KS_COMPOSE" > "$KS_COMPOSE_TMP"
+  mv "$KS_COMPOSE_TMP" "$KS_COMPOSE"
+  echo "  injected: public_tcbinfo=true, port_policy={restrict_mode:true, ports:[{port:8081}]}"
+fi
 
 # Replace-on-redeploy: vmm ALLOWS duplicate VM names, so re-running with the same name would
 # create a SECOND CVM and the reboot/lookup below could target the wrong one. Remove any existing
@@ -129,6 +170,13 @@ AGENT_HOST_PORT="$(pick_free_port 9210)" || { echo "No free host port for the ag
 KS_HOST_PORT="$(pick_free_port "$((AGENT_HOST_PORT + 1))")" || { echo "No free host port for 8081" >&2; exit 1; }
 echo "  agent host port: $AGENT_HOST_PORT (initial; worker-ctl.sh discovers the live port)"
 echo "  keystore host port: 127.0.0.1:$KS_HOST_PORT -> 8081 (loopback smoke test only)"
+# Gateway mode: --gateway-url is the PER-VM dstack-gateway URL (we never edit vmm.toml — a vmm
+# restart would kill every CVM on the node). Plain mode: no flag.
+DEPLOY_GW_FLAG=()
+if [ -n "$GATEWAY_URL" ]; then
+  DEPLOY_GW_FLAG=(--gateway-url "$GATEWAY_URL")
+  echo "  gateway-url (per-VM): $GATEWAY_URL"
+fi
 DEPLOY_OUT="$(python3 "$VMM_CLI" --url "$VMM_URL" deploy \
   --name "$APP_NAME" \
   --compose "$HERE/keystore/app-compose.json" \
@@ -136,6 +184,7 @@ DEPLOY_OUT="$(python3 "$VMM_CLI" --url "$VMM_URL" deploy \
   --env-file "$ENVFILE" \
   --kms-url "$KMS_URL" \
   --vcpu 2 --memory 2G --disk 1G \
+  "${DEPLOY_GW_FLAG[@]}" \
   --port "tcp:127.0.0.1:$AGENT_HOST_PORT:8090" \
   --port "tcp:127.0.0.1:$KS_HOST_PORT:8081" 2>&1)"
 echo "$DEPLOY_OUT"
@@ -151,6 +200,19 @@ if [ -n "$VM_ID" ]; then
   echo "Clean-DNS reboot of $APP_NAME ($VM_ID) so the guest reaches the KMS at 10.0.2.2..."
   python3 "$VMM_CLI" --url "$VMM_URL" stop -f "$VM_ID" >/dev/null 2>&1 || true
   python3 "$VMM_CLI" --url "$VMM_URL" start "$VM_ID" >/dev/null 2>&1 || true
+fi
+
+if [ -n "$GATEWAY_URL" ]; then
+  # app-id = sha256(app-compose.json)[:40] (vmm-cli calc_app_id), computed from the FINAL compose
+  # (post jq-injection) so it matches what the gateway routes by. Public URL host is derived from
+  # GATEWAY_URL: strip the scheme, the leading "gateway." label, and the :PORT ->
+  # https://gateway.dstack.outlayer.ai:9202 -> dstack.outlayer.ai.
+  KS_APP_ID="$(sha256sum "$HERE/keystore/app-compose.json" | cut -c1-40)"
+  GW_DOMAIN="$(printf '%s' "$GATEWAY_URL" | sed -E 's#^https?://##; s#:[0-9]+$##; s#/.*$##; s#^gateway\.##')"
+  KEYSTORE_BASE_URL="https://${KS_APP_ID}-8081.${GW_DOMAIN}"
+  echo "Gateway mode: keystore app-id=$KS_APP_ID"
+  echo "  public URL (via dstack-gateway): $KEYSTORE_BASE_URL"
+  echo "  KEYSTORE_BASE_URL=$KEYSTORE_BASE_URL"
 fi
 
 echo "Done. Keystore boots, gets its KMS app key + a TDX quote, and self-submits its DAO"
