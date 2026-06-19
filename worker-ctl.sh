@@ -11,6 +11,7 @@
 #   ./worker-ctl.sh logs                   # last 200 worker app-log lines (snapshot)
 #   ./worker-ctl.sh follow                 # stream worker app logs (Ctrl-C to stop)
 #   ./worker-ctl.sh restart                # stop -f + start (re-runs registration)
+#   ./worker-ctl.sh remove <cvm-name>      # stop + delete the CVM (record + disk) — destructive
 #   ./worker-ctl.sh port                   # print the current agent host port
 #   ./worker-ctl.sh logs <cvm-name>        # target a CVM by name (positional), e.g.:
 #   ./worker-ctl.sh logs outlayer-worker-testnet-0.1.35-1
@@ -69,5 +70,6 @@ case "$cmd" in
   stop)       vmm stop -f "$(need_uuid)" ;;
   start)      vmm start "$(need_uuid)" ;;
   restart)    u=$(need_uuid); vmm stop -f "$u"; vmm start "$u"; echo "restarted $NAME ($u) — re-run '$0 follow' to watch (port changed)" ;;
-  *) echo "usage: $0 <status|info|uuid|port|logs|follow|serial|stop|start|restart>" >&2; exit 1 ;;
+  remove|rm)  u=$(need_uuid); vmm stop -f "$u" >/dev/null 2>&1 || true; vmm remove "$u" && echo "REMOVED $NAME ($u) — CVM + disk deleted (gone from lsvm; not recoverable)" ;;
+  *) echo "usage: $0 <status|info|uuid|port|logs|follow|serial|stop|start|restart|remove> [cvm-name]" >&2; exit 1 ;;
 esac
