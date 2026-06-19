@@ -19,12 +19,16 @@ ENVFILE="${ENVFILE:-$HERE/worker/worker.env}"
 [ -f "$ENVFILE" ] || ENVFILE="$HERE/$ENVFILE"
 VMM_CLI="${VMM_CLI:-/opt/mpc/dstack/vmm/src/vmm-cli.py}"   # adjust to your dstack path
 IMAGE_OS="${IMAGE_OS:-dstack-0.5.11}"   # must exist in vmm's image dir (vmm-cli lsimage); affects MRTD/RTMR0-2
-# KMS_URL: where `deploy` fetches the env-encryption pubkey to encrypt --env-file. The KMS CVM
-# maps its API to the host at 127.0.0.1:11001. The cert's SAN is kms.1022.dstack.org (which
-# resolves to 10.0.2.2 — only reachable INSIDE CVMs, NOT from the host), but vmm-cli's KMS client
-# does not verify TLS, so 127.0.0.1 works directly. Using 127.0.0.1 avoids an /etc/hosts hack that
-# would otherwise pollute the GUESTS' DNS (slirp resolves *.1022.dstack.org via the host resolver).
-KMS_URL="${KMS_URL:-https://127.0.0.1:11001}"
+# KMS_URL is used for BOTH (a) host-side env-encryption at deploy AND (b) baked into the CVM as
+# its RUNTIME kms_urls (vmm-cli.py: params["kms_urls"]=args.kms_url). So it MUST be the URL the
+# CVM uses at runtime: https://kms.1022.dstack.org:11001 -> resolves to 10.0.2.2 (the host) via
+# slirp INSIDE the CVM. (Do NOT use 127.0.0.1 here — it bakes the CVM's own loopback and boot
+# fails "Connection refused".) The catch: that hostname resolves to 10.0.2.2 on the HOST too,
+# which the host can't reach — so for the host-side encryption we add a TEMPORARY /etc/hosts
+# entry kms.1022.dstack.org->127.0.0.1, then REMOVE it before the CVM boots (else slirp hands the
+# guest 127.0.0.1). See the /etc/hosts dance around the deploy below.
+KMS_URL="${KMS_URL:-https://kms.1022.dstack.org:11001}"
+KMS_HOST="$(printf '%s' "$KMS_URL" | sed -E 's#^https?://([^:/]+).*#\1#')"
 # APP_NAME  = the CVM's VM LABEL (shown in lsvm, targeted by worker-ctl.sh). Unique per instance.
 # COMPOSE_NAME = the name baked into the MEASURED app-compose (drives the compose hash -> RTMR3 ->
 #   measurements). Keep it STABLE per (network, version) so all instances of a version share the
@@ -60,6 +64,16 @@ echo "  worker digest: $DIGEST"
 echo "  verify (on a trusted machine): gh attestation verify oci://docker.io/outlayer/near-outlayer-worker@$DIGEST -R fastnear/near-outlayer"
 sed -i.bak "s|image: docker.io/outlayer/near-outlayer-worker@sha256:.*|image: docker.io/outlayer/near-outlayer-worker@$DIGEST|" "$COMPOSE"
 
+# --- temporary /etc/hosts so the HOST-side KMS encryption can reach $KMS_HOST (see KMS_URL note).
+#     Removed before the CVM boots so the guest resolves $KMS_HOST -> 10.0.2.2 (host), not 127.0.0.1.
+HOSTS_MARK="outlayer-tdx-deploy-kms"
+hosts_cleanup() { sudo sed -i "\|${HOSTS_MARK}|d" /etc/hosts 2>/dev/null || true; }
+trap hosts_cleanup EXIT
+if ! grep -qF "$HOSTS_MARK" /etc/hosts; then
+  echo "127.0.0.1 $KMS_HOST # $HOSTS_MARK" | sudo tee -a /etc/hosts >/dev/null
+  echo "  (temporary) /etc/hosts: $KMS_HOST -> 127.0.0.1 (host-side KMS encryption only)"
+fi
+
 echo "[2/3] Build app-compose (measured name=$COMPOSE_NAME; KMS env NOT baked into it)..."
 python3 "$VMM_CLI" --url "$VMM_URL" compose \
   --name "$COMPOSE_NAME" \
@@ -79,7 +93,18 @@ python3 "$VMM_CLI" --url "$VMM_URL" deploy \
   --vcpu 2 --memory 4G --disk 60G \
   --port "tcp:127.0.0.1:9210:8090"
 
-echo "Done. Worker will boot, get a TDX quote via /var/run/dstack.sock, and attempt"
-echo "registration. First boot fails (measurements not approved) — read the worker's"
-echo "5 measurements from its logs, then owner-approve on the register-contract (Step 6)."
-echo "Logs: curl -sN 'http://127.0.0.1:9210/logs/worker?text=true&bare=true&follow=true&tail=100'"
+# Remove the temp /etc/hosts NOW (before the guest's KMS DNS query), then reboot the CVM so its
+# boot resolves $KMS_HOST -> 10.0.2.2 cleanly (the first boot may race the entry and fail KMS).
+hosts_cleanup; trap - EXIT
+VM_ID="$(python3 "$VMM_CLI" --url "$VMM_URL" lsvm 2>/dev/null | grep -w "$APP_NAME" \
+  | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)"
+if [ -n "$VM_ID" ]; then
+  echo "Clean-DNS reboot of $APP_NAME ($VM_ID) so the guest reaches the KMS at 10.0.2.2..."
+  python3 "$VMM_CLI" --url "$VMM_URL" stop -f "$VM_ID" >/dev/null 2>&1 || true
+  python3 "$VMM_CLI" --url "$VMM_URL" start "$VM_ID" >/dev/null 2>&1 || true
+fi
+
+echo "Done. Worker boots, gets its KMS app key + a TDX quote, and attempts registration."
+echo "First boot fails on measurements-not-approved (expected) but the CVM stays up — the"
+echo "orchestrator (scripts/deploy_tdx.sh) reads the 5 measurements + owner-approves + restarts."
+echo "Logs:  NAME=$APP_NAME worker-ctl.sh follow"

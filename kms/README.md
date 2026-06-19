@@ -63,30 +63,22 @@ per appId** (apps can't read each other's secrets), `osImages` still gates the O
 worker registration is still gated by the register-contract's `approved_measurements`. This lets
 us redeploy workers with new names/versions without editing this allowlist.
 
-It is an `index.ts` customization (committed here for reproducibility — the live file lives in
-the `meta-dstack` checkout, outside this repo). The two additions:
+It is a two-line `index.ts` customization (the live auth-simple lives in the `meta-dstack`
+checkout, outside this repo). **Apply it from git — do NOT hand-edit** — with the idempotent,
+re-runnable script `apply-auth-simple.sh` (run on the node; uses sudo only for the restart):
 
-1. In `AuthConfigSchema`: `allowAnyApp: z.boolean().default(false),`
-2. At the top of `checkAppBoot(...)` (after `appId`/`composeHash` are normalized):
-   ```ts
-   if (config.allowAnyApp) {
-     return { isAllowed: true,
-       reason: 'allowAnyApp (single-tenant node; register-contract gates worker registration)',
-       gatewayAppId: config.gatewayAppId };
-   }
-   ```
-
-Apply on the node (root — this modifies + restarts the live KMS auth webhook):
 ```bash
-T=/home/outlayer/meta-dstack/dstack/kms/auth-simple/index.ts
-cp "$T" "$T.bak"                                   # backup (revert: cp "$T.bak" "$T")
-cp /tmp/authsimple-index.allowAnyApp.ts "$T"       # the patched file (staged here)
-chown outlayer:outlayer "$T"
-python3 -c 'import json;p="/home/outlayer/outlayer-kms/auth-config.json";d=json.load(open(p));d["allowAnyApp"]=True;json.dump(d,open(p,"w"),indent=2)'
-systemctl restart outlayer-kms-auth.service
-systemctl is-active outlayer-kms-auth.service       # expect: active
-journalctl -u outlayer-kms-auth.service -n 5 --no-pager
+cd ~/self-hosted-tdx/kms && ./apply-auth-simple.sh
+# -> patches index.ts (adds `allowAnyApp` to the schema + an early allow in checkAppBoot,
+#    backup at index.ts.bak.pre-allowAnyApp), sets allowAnyApp=true in auth-config.json,
+#    restarts outlayer-kms-auth.service. Skips anything already applied.
+journalctl -u outlayer-kms-auth.service -f          # watch boot allow/deny decisions
 ```
+
+The script's two additions: `allowAnyApp: z.boolean().default(false)` in `AuthConfigSchema`, and
+at the top of `checkAppBoot(...)` an early `if (config.allowAnyApp) return { isAllowed: true, … }`.
+
 After this, a worker with a new name/version boots (KMS issues its key); it then only needs its
 measurements approved on the register-contract (the Mac orchestrator `scripts/deploy_tdx.sh` does
-that automatically). Revert anytime with the `.bak` + remove `allowAnyApp` from the config + restart.
+that automatically). Revert: `cp index.ts.bak.pre-allowAnyApp index.ts`, set `allowAnyApp` false
+in the config, restart the service.
