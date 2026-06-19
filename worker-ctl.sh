@@ -12,13 +12,19 @@
 #   ./worker-ctl.sh follow                 # stream worker app logs (Ctrl-C to stop)
 #   ./worker-ctl.sh restart                # stop -f + start (re-runs registration)
 #   ./worker-ctl.sh port                   # print the current agent host port
-#   NAME=outlayer-worker-mainnet ./worker-ctl.sh logs   # target a different CVM
+#   ./worker-ctl.sh logs <cvm-name>        # target a CVM by name (positional), e.g.:
+#   ./worker-ctl.sh logs outlayer-worker-testnet-0.1.35-1
+#   ./worker-ctl.sh logs kms               # KMS CVM (auto-uses container dstack-kms-1)
+#   NAME=outlayer-worker-mainnet ./worker-ctl.sh follow  # or target via NAME= env
+#
+# NOTE: for KMS *boot-authorization* decisions (allow/deny on worker boot) see the host log:
+#   journalctl -u outlayer-kms-auth.service -f
 set -euo pipefail
 
 V="${VMM_CLI:-/opt/mpc/dstack/vmm/src/vmm-cli.py}"
 U="${VMM_URL:-http://127.0.0.1:11000}"
-NAME="${NAME:-outlayer-worker}"          # CVM name as shown in `lsvm`
-CONTAINER="${CONTAINER:-dstack-worker-1}" # docker container for app logs (compose: project dstack, service worker)
+NAME="${NAME:-outlayer-worker}"          # CVM name (lsvm); override via env or positional arg
+CONTAINER="${CONTAINER:-}"               # app-log container; auto-picked from NAME below if empty
 TAIL="${TAIL:-200}"
 
 vmm() { python3 "$V" --url "$U" "$@"; }
@@ -46,6 +52,10 @@ need_uuid() {
 }
 
 cmd="${1:-status}"; shift || true
+# optional positional CVM name after the subcommand: `worker-ctl.sh logs <name>`
+if [ "${1:-}" ] && [[ "${1:-}" != -* ]]; then NAME="$1"; shift; fi
+# pick the app-log container from the CVM name (compose project 'dstack'): kms -> dstack-kms-1
+[ -n "$CONTAINER" ] || case "$NAME" in *kms*) CONTAINER=dstack-kms-1;; *) CONTAINER=dstack-worker-1;; esac
 case "$cmd" in
   status|ls)  vmm lsvm ;;
   info)       vmm info "$(need_uuid)" ;;
