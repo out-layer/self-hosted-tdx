@@ -284,6 +284,23 @@ if [ "$MODE" = deploy ]; then
   echo "=== lsvm ==="
   python3 "$VMM_CLI" --url "$VMM_RPC" lsvm
   echo
+  # Allow gateway-enabled CVMs (the keystore) to register with THIS gateway: the KMS hands the allowed
+  # gateway app-id to gateway-enabled CVMs at boot; without it they reboot-loop with "Missing allowed
+  # dstack-gateway app id" (dstack-util system_setup.rs:588). Set it to this gateway's app-id + reload
+  # auth-simple — auto-runs on every (re)deploy, so the keystore never needs a manual KMS edit and the
+  # value tracks the gateway's (per-deploy) app-id. (auth-simple is boot-auth only; reload doesn't
+  # disturb running CVMs.) The gateway app-id is verified by gateway-enabled CVMs via RA-TLS.
+  AUTH_CONFIG="${AUTH_CONFIG:-/home/$NODE_USER/outlayer-kms/auth-config.json}"
+  if [ -f "$AUTH_CONFIG" ]; then
+    python3 -c 'import json,sys; p,a=sys.argv[1],sys.argv[2]; d=json.load(open(p)); d["gatewayAppId"]=a; json.dump(d,open(p,"w"),indent=2)' "$AUTH_CONFIG" "$APP_ID" \
+      && echo "KMS auth-simple: gatewayAppId=$APP_ID set (gateway-enabled CVMs may now register with this gateway)"
+    sudo systemctl restart outlayer-kms-auth.service 2>/dev/null \
+      && echo "  auth-simple reloaded" \
+      || echo "  WARN: reload manually: sudo systemctl restart outlayer-kms-auth.service"
+  else
+    echo "WARN: $AUTH_CONFIG not found — set gatewayAppId=$APP_ID in the KMS auth-config + restart auth-simple manually"
+  fi
+  echo
   echo "Gateway CVM deployed (name=$APP_NAME, app-id=$APP_ID). Watch boot:"
   echo "  NAME=$APP_NAME CONTAINER=dstack-gateway-1 worker-ctl.sh follow"
   echo "REMAINING live steps (operator):"

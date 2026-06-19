@@ -145,6 +145,13 @@ NAME=dstack-gateway CONTAINER=dstack-gateway-1 worker-ctl.sh logs | grep -iE 'Ce
 - **Redeploy** (`./40-deploy-gateway.sh deploy` again) replaces the gateway in place (replace-on-redeploy
   removes the old CVM first, freeing :443/:9202); the app-id changes per run (launch-token), which is
   fine (allowAnyApp). Deploy + the matching `.app_env` are produced in the same run.
+- **Gateway-enabled apps (the keystore) need the KMS to allow THIS gateway's app-id.** Otherwise the
+  app reboot-loops at first boot with `Error: Missing allowed dstack-gateway app id` (dstack-util
+  `system_setup.rs:588`) — a clean reboot right after `Filesystem options: encryption=true`, not a
+  panic. `40-deploy-gateway.sh deploy` now writes `gatewayAppId=<this gateway's app-id>` into the KMS
+  auth-config (`outlayer-kms/auth-config.json`) + reloads `outlayer-kms-auth` automatically, so it
+  tracks the per-redeploy gateway app-id with NO manual step. The gateway-enabled CVM verifies the
+  gateway by that app-id over RA-TLS (using `"any"` instead would skip the check — a downgrade).
 
 ## Security mitigations (baked into the deploy; do not regress)
 
