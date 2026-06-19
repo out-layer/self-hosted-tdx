@@ -167,12 +167,27 @@ NAME=dstack-gateway CONTAINER=dstack-gateway-1 worker-ctl.sh logs | grep -iE 'Ce
 | `127.0.0.1:9203` | 8001 | loopback | admin RPC (certbot/DNS-cred/ZT-domain/exit) — MUST stay loopback |
 | `127.0.0.1:9206` | 8090 | loopback | guest-agent (logs/measurements via worker-ctl.sh) |
 
-## Ops
+## Ops — start / stop / restart / logs
+
+The gateway CVM is managed like any other, via `worker-ctl.sh` (resolves it by name;
+auto-picks the `dstack-gateway-1` container):
 
 ```bash
-NAME=dstack-gateway CONTAINER=dstack-gateway-1 worker-ctl.sh follow   # gateway app logs
-NAME=dstack-gateway worker-ctl.sh status | restart | stop | start
+worker-ctl.sh status                      # list all CVMs (find dstack-gateway + its status)
+NAME=dstack-gateway worker-ctl.sh logs    # gateway app logs (snapshot)
+NAME=dstack-gateway worker-ctl.sh follow  # stream gateway logs (Ctrl-C to stop)
+NAME=dstack-gateway worker-ctl.sh restart # stop -f + start  (re-runs the boot-time cert check)
+NAME=dstack-gateway worker-ctl.sh stop    # stop the gateway CVM
+NAME=dstack-gateway worker-ctl.sh start   # start a stopped gateway CVM
+NAME=dstack-gateway worker-ctl.sh serial  # qemu boot/serial console (boot or attestation issues)
 ```
+
+- **Restart is safe + keeps the cert:** the ACME account + wildcard cert live on the CVM's encrypted
+  disk/WaveKV, so a stop/start comes back with the cert and **does NOT need a re-`bootstrap`**. (Use a
+  restart to re-trigger a failed cert acquisition after fixing DNS — it re-runs the cert check on boot.)
+- The guest-agent host port is reassigned on each start; `worker-ctl.sh` auto-discovers it.
+- **Re-deploy** (new image / config): `sudo -u outlayer ./40-deploy-gateway.sh deploy` (replace-on-redeploy
+  removes the old CVM first). **Do NOT** restart the vmm to apply changes — it kills every CVM.
 
 - **Switch keystores:** the canonical URL is `https://<keystore-app-id>-8081.dstack.outlayer.ai`. Run
   several keystores; flip which app-id you publish (or, with the same app-id, the gateway load-balances

@@ -73,7 +73,12 @@ cmd="${1:-status}"; shift || true
 # optional positional CVM name after the subcommand: `worker-ctl.sh logs <name>`
 if [ "${1:-}" ] && [[ "${1:-}" != -* ]]; then NAME="$1"; shift; fi
 # pick the app-log container from the CVM name (compose project 'dstack'): kms -> dstack-kms-1
-[ -n "$CONTAINER" ] || case "$NAME" in *kms*) CONTAINER=dstack-kms-1;; *) CONTAINER=dstack-worker-1;; esac
+[ -n "$CONTAINER" ] || case "$NAME" in
+  *kms*)      CONTAINER=dstack-kms-1 ;;
+  *gateway*)  CONTAINER=dstack-gateway-1 ;;
+  *keystore*) CONTAINER=dstack-keystore-1 ;;
+  *)          CONTAINER=dstack-worker-1 ;;
+esac
 # Resolve the target uuid up front for every subcommand except status — and propagate a
 # resolution failure (need_uuid's `exit` inside $() would otherwise be swallowed, leaving an
 # empty uuid that agent_port matches to the first qemu). `|| exit 1` stops cleanly on error.
