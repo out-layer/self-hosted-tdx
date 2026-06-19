@@ -49,13 +49,16 @@ case "$COMPONENT" in
       echo "  cp $HERE/worker/${NETWORK}-worker.env.template $HERE/$ENVREL  and fill the secrets" >&2
       exit 1
     }
-    : "${NAME:=outlayer-worker-${NETWORK}-${DEPLOY_VERSION#v}-1}"
-    echo "Deploy WORKER  net=$NETWORK  name=$NAME  version=$VER  env=$ENVREL"
+    # COMPOSE_NAME is STABLE per (net, version) -> shared measurements -> approve ONCE per (net,ver).
+    # NAME is the per-instance VM label (lsvm / worker-ctl.sh). Add an index for extra instances.
+    COMPOSE_NAME="outlayer-worker-${NETWORK}-${DEPLOY_VERSION#v}"
+    : "${NAME:=${COMPOSE_NAME}-1}"
+    echo "Deploy WORKER  net=$NETWORK  vm-label=$NAME  measured-name=$COMPOSE_NAME  version=$VER  env=$ENVREL"
     if $DRY_RUN; then
-      echo "(dry-run) APP_NAME=$NAME ENVFILE=$ENVREL $HERE/40-deploy-worker.sh $VER"
+      echo "(dry-run) APP_NAME=$NAME COMPOSE_NAME=$COMPOSE_NAME ENVFILE=$ENVREL $HERE/40-deploy-worker.sh $VER"
       exit 0
     fi
-    APP_NAME="$NAME" ENVFILE="$ENVREL" "$HERE/40-deploy-worker.sh" "$VER"
+    APP_NAME="$NAME" COMPOSE_NAME="$COMPOSE_NAME" ENVFILE="$ENVREL" "$HERE/40-deploy-worker.sh" "$VER"
     echo "Deployed '$NAME'. First boot needs measurement approval (see docs/cvm-operations.md)."
     echo "Manage:  NAME=$NAME worker-ctl.sh follow | restart | stop"
     ;;

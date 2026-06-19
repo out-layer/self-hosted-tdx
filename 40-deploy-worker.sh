@@ -19,9 +19,13 @@ ENVFILE="${ENVFILE:-$HERE/worker/worker.env}"
 [ -f "$ENVFILE" ] || ENVFILE="$HERE/$ENVFILE"
 VMM_CLI="${VMM_CLI:-/opt/mpc/dstack/vmm/src/vmm-cli.py}"   # adjust to your dstack path
 IMAGE_OS="${IMAGE_OS:-dstack-0.5.8}"
-# APP_NAME = CVM name (NOT a worker.env var). Encode net+version+index, e.g.
-#   APP_NAME=outlayer-worker-mainnet-0.1.35-1   (worker-ctl.sh targets this name)
+# APP_NAME  = the CVM's VM LABEL (shown in lsvm, targeted by worker-ctl.sh). Unique per instance.
+# COMPOSE_NAME = the name baked into the MEASURED app-compose (drives the compose hash -> RTMR3 ->
+#   measurements). Keep it STABLE per (network, version) so all instances of a version share the
+#   same measurements and you approve them ONCE. Defaults to APP_NAME if unset (single-instance).
+# Neither is a worker.env variable — both are deploy-time args.
 APP_NAME="${APP_NAME:-outlayer-worker}"
+COMPOSE_NAME="${COMPOSE_NAME:-$APP_NAME}"
 
 [ -f "$ENVFILE" ] || { echo "Missing $ENVFILE (cp worker/worker.env.template worker.env + fill secrets)"; exit 1; }
 
@@ -50,9 +54,9 @@ echo "  worker digest: $DIGEST"
 echo "  verify (on a trusted machine): gh attestation verify oci://docker.io/outlayer/near-outlayer-worker@$DIGEST -R fastnear/near-outlayer"
 sed -i.bak "s|image: docker.io/outlayer/near-outlayer-worker@sha256:.*|image: docker.io/outlayer/near-outlayer-worker@$DIGEST|" "$COMPOSE"
 
-echo "[2/3] Build app-compose (KMS mode, env encrypted — NOT baked into measured compose)..."
+echo "[2/3] Build app-compose (measured name=$COMPOSE_NAME; KMS env NOT baked into it)..."
 python3 "$VMM_CLI" --url "$VMM_URL" compose \
-  --name "$APP_NAME" \
+  --name "$COMPOSE_NAME" \
   --docker-compose "$COMPOSE" \
   --kms \
   --public-logs --no-instance-id \
