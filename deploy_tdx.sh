@@ -11,6 +11,10 @@
 #   ./deploy_tdx.sh worker mainnet  outlayer-worker-mainnet-0.1.35-1 --version 0.1.35
 #   ./deploy_tdx.sh worker testnet  --version 0.1.35           # name defaults to outlayer-worker-testnet-0.1.35-1
 #
+# This node has no `gh`, so the worker image digest can't be auto-resolved here. Resolve +
+# attest it ONCE on a machine with gh, then pass it (it propagates to 40-deploy-worker.sh):
+#   WORKER_DIGEST=sha256:<digest> ./deploy_tdx.sh worker testnet worker0135-1 --version 0.1.35
+#
 # The worker env comes from worker/.env.<network>-worker-tdx (gitignored; copy from
 # worker/<network>-worker.env.template and fill secrets). The name (3rd arg) becomes the
 # CVM name (APP_NAME) — worker-ctl.sh then targets it by that name.

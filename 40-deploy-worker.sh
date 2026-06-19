@@ -25,12 +25,29 @@ APP_NAME="${APP_NAME:-outlayer-worker}"
 
 [ -f "$ENVFILE" ] || { echo "Missing $ENVFILE (cp worker/worker.env.template worker.env + fill secrets)"; exit 1; }
 
-echo "[1/3] Resolve verifiable worker digest for $VERSION (from GitHub release, Sigstore-attested)..."
-DIGEST=$(gh release view "$VERSION" --repo fastnear/near-outlayer --json body -q '.body' 2>/dev/null \
-  | grep -iE '\| *worker *\|' | grep -oE 'sha256:[a-f0-9]{64}' | head -1)
-[ -n "$DIGEST" ] || { echo "Could not find worker digest for $VERSION"; exit 1; }
+echo "[1/3] Resolve verifiable worker digest for $VERSION..."
+if [ -n "${WORKER_DIGEST:-}" ]; then
+  # Operator-supplied, pre-verified digest. Use this on nodes WITHOUT gh (e.g. the TDX node):
+  # resolve + attest the digest once on a trusted machine that has gh, then pass it here.
+  case "$WORKER_DIGEST" in sha256:*) DIGEST="$WORKER_DIGEST" ;; *) DIGEST="sha256:$WORKER_DIGEST" ;; esac
+  echo "  using WORKER_DIGEST override: $DIGEST"
+elif command -v gh >/dev/null 2>&1; then
+  # `|| true`: don't let set -e kill us inside the command substitution — the guard below
+  # prints a useful message instead of dying silently.
+  DIGEST=$(gh release view "$VERSION" --repo fastnear/near-outlayer --json body -q '.body' 2>/dev/null \
+    | grep -iE '\| *worker *\|' | grep -oE 'sha256:[a-f0-9]{64}' | head -1) || true
+  echo "  worker digest (GitHub release, Sigstore-attested): ${DIGEST:-<none found>}"
+else
+  echo "ERROR: gh is not installed and WORKER_DIGEST is not set." >&2
+  echo "  On a machine WITH gh (e.g. your laptop), resolve + verify the digest:" >&2
+  echo "    gh release view $VERSION --repo fastnear/near-outlayer --json body -q .body | grep -iE '\\| *worker *\\|'" >&2
+  echo "    gh attestation verify oci://docker.io/outlayer/near-outlayer-worker@<digest> -R fastnear/near-outlayer" >&2
+  echo "  then re-run here with:  WORKER_DIGEST=sha256:<digest> $0 $VERSION" >&2
+  exit 1
+fi
+[ -n "$DIGEST" ] || { echo "Could not resolve worker digest for $VERSION — pass WORKER_DIGEST=sha256:..." >&2; exit 1; }
 echo "  worker digest: $DIGEST"
-echo "  verify: gh attestation verify oci://docker.io/outlayer/near-outlayer-worker@$DIGEST -R fastnear/near-outlayer"
+echo "  verify (on a trusted machine): gh attestation verify oci://docker.io/outlayer/near-outlayer-worker@$DIGEST -R fastnear/near-outlayer"
 sed -i.bak "s|image: docker.io/outlayer/near-outlayer-worker@sha256:.*|image: docker.io/outlayer/near-outlayer-worker@$DIGEST|" "$COMPOSE"
 
 echo "[2/3] Build app-compose (KMS mode, env encrypted — NOT baked into measured compose)..."

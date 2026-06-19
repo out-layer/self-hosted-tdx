@@ -9,3 +9,5 @@ auth-config.json
 certs/
 run/
 images/
+
+worker/.env.*
