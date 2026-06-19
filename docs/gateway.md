@@ -37,6 +37,20 @@ client (worker / coordinator)
    *.dstack.outlayer.ai   A   <node-public-ip>   (DNS only / gray cloud)
    ```
    `gateway.dstack.outlayer.ai` is covered by the wildcard (used as the gateway RPC `MY_URL`).
+
+   > **⚠️ Host resolver (critical for ACME DNS-01).** The node's resolver must use a reliable public
+   > DNS and NOT cache negative answers. Otherwise the in-CVM certbot self-check queries the
+   > just-created `_acme-challenge.<domain>` TXT *before* it propagates, the resolver caches the
+   > NXDOMAIN, serves it stale, and certbot times out after 300s ("challenge not found"). All CVMs
+   > resolve through the host (slirp), so fix it once on the host — drop-in
+   > `/etc/systemd/resolved.conf.d/outlayer-acme-dns.conf`:
+   > ```
+   > [Resolve]
+   > DNS=1.1.1.1 8.8.8.8
+   > Cache=no-negative
+   > ```
+   > then `sudo systemctl restart systemd-resolved && resolvectl flush-caches`. Verify:
+   > `dig +short TXT _acme-challenge.<domain>` returns the value once certbot has created it.
 2. **Scoped Cloudflare API token** for in-CVM ACME DNS-01 (the ONLY production cert path in 0.5.11 —
    there is no operator-cert load path). Scope: `Zone.DNS:Edit` + `Zone.Zone:Read` on the
    `outlayer.ai` zone only. Stash it on the node, never in git:
@@ -95,6 +109,42 @@ sudo -u outlayer ./40-deploy-gateway.sh bootstrap
 jq '.gateway_enabled=true | .public_tcbinfo=true | .port_policy={restrict_mode:true, ports:[{port:8081}]}' \
    keystore/app-compose.json > keystore/app-compose.gw.json
 ```
+
+## Verified end-to-end (testnet, 2026-06-19) — the happy path + gotchas
+
+What actually worked, in order, on `node-tdx-dal-2`:
+
+1. Built `outlayer/dstack-gateway:0.5.11` from the on-node 0.5.11 source, `docker push`ed it, pinned
+   the `@sha256:072e…` digest. DNS `*.dstack.outlayer.ai A 173.237.9.76` **gray-cloud**; scoped CF
+   token at `/home/outlayer/gateway-cf-token`; host resolver set to public DNS + `Cache=no-negative`.
+2. `sudo -u outlayer ./40-deploy-gateway.sh deploy` → gateway CVM up. Boot log shows
+   `tcp bridge listening on 0.0.0.0:443`, `endpoint=https://0.0.0.0:8000 (TCP + mTLS)`,
+   `endpoint=http://127.0.0.1:8001` (admin). KMS issued the app key (allowAnyApp); image pulled.
+3. **L3 is NOT a vmm restart** — the keystore uses `--gateway-url` per-VM. Restarting
+   `outlayer-dstack-vmm.service` would kill every CVM (they share its cgroup).
+4. `sudo -u outlayer ./40-deploy-gateway.sh bootstrap` → SetCertbotConfig + CreateDnsCredential +
+   AddZtDomain → `Bootstrap complete`.
+5. Cert issued: `new certificate obtained from ACME … wildcard certificate for *.dstack.outlayer.ai
+   (89 days) … CertResolver initialized with 1 domains`. Auto-renewal task running.
+
+Verify the cert any time:
+```
+NAME=dstack-gateway CONTAINER=dstack-gateway-1 worker-ctl.sh logs | grep -iE 'CertResolver|wildcard certificate'
+```
+
+### Gotchas that cost time (fixed in the script — don't repeat)
+- **Bootstrap hangs at "Waiting for gateway admin API".** Cause: in-CVM `ADMIN_LISTEN_ADDR=127.0.0.1`
+  — with `NET_MODE=user`, slirp's host-forward reaches the guest's eth0, NOT its loopback, so an
+  in-CVM loopback bind is unreachable from the host's `127.0.0.1:9203`. Fix: `ADMIN_LISTEN_ADDR=0.0.0.0`
+  (the host port map `127.0.0.1:9203` remains the WAN gate). Baked into `40-deploy-gateway.sh`.
+- **ACME DNS-01 times out ("challenge not found", 300s).** Cause: negative DNS caching on the host
+  resolver (see the prerequisite above). Fix the resolver, then re-trigger by **restarting the gateway
+  CVM** (`NAME=dstack-gateway worker-ctl.sh restart`) — it re-runs the cert check on boot. The ACME
+  account + ZT-domain live on the CVM's encrypted disk/WaveKV and survive a stop/start, so you do NOT
+  need to re-run `bootstrap`.
+- **Redeploy** (`./40-deploy-gateway.sh deploy` again) replaces the gateway in place (replace-on-redeploy
+  removes the old CVM first, freeing :443/:9202); the app-id changes per run (launch-token), which is
+  fine (allowAnyApp). Deploy + the matching `.app_env` are produced in the same run.
 
 ## Security mitigations (baked into the deploy; do not regress)
 
