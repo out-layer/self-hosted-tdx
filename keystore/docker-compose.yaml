@@ -48,5 +48,12 @@ services:
       RUST_LOG: ${RUST_LOG:-info,keystore_worker=debug}
       # Do NOT set KEYSTORE_MASTER_SECRET — it is incompatible with TEE mode (the master is
       # derived in-TEE from MPC CKD). Setting it would override the TEE-derived master.
+    # Publish 8081 to the CVM's host network so callers reach the keystore: the dstack-gateway
+    # connects to the keystore over the WireGuard mesh (gateway -> <wg-ip>:8081) and the deploy's
+    # loopback smoke-test port maps to the guest's :8081 — both need the container port on the CVM
+    # network, not buried inside the container's docker netns. Without this the gateway gets
+    # "connection refused" (os error 111). (Mirrors docker-compose.keystore-phala.yml.)
+    ports:
+      - "${SERVER_PORT}:${SERVER_PORT}"
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock:ro
