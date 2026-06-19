@@ -31,7 +31,7 @@ set -euo pipefail
 # auth-simple runs with allowAnyApp, so a new app-id boots without an allowlist entry. L3 (vmm.toml
 # gateway_urls + vmm restart) and L4 (ACME bootstrap) remain operator steps, printed after 'deploy'.
 MODE="${1:-prep}"
-case "$MODE" in prep|deploy) : ;; *) echo "usage: $0 [prep|deploy]" >&2; exit 1 ;; esac
+case "$MODE" in prep|deploy|bootstrap) : ;; *) echo "usage: $0 [prep|deploy|bootstrap]" >&2; exit 1 ;; esac
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 NODE_USER="${NODE_USER:-outlayer}"
@@ -105,6 +105,20 @@ echo "  WAN: RPC/WG 0.0.0.0:9202, TLS serving 443; --public-sysinfo DROPPED"
 echo "  OS_IMAGE=$OS_IMAGE  GATEWAY_IMAGE=$GATEWAY_IMAGE"
 echo "  CF token: read from $CF_TOKEN_FILE (value never printed)"
 echo
+
+if [ "$MODE" = bootstrap ]; then
+  # --- L4: ACME/DNS/ZT-Domain bootstrap via the gateway admin RPC (LIVE; once per cluster). ---
+  # The gateway CVM must already be up (./40-deploy-gateway.sh deploy) with its admin RPC live on the
+  # loopback host port. Obtains the *.$SRV_DOMAIN wildcard cert via in-CVM ACME DNS-01 (Cloudflare).
+  echo "=== L4: bootstrap ACME/DNS/ZT-Domain (LIVE) — admin RPC $GATEWAY_ADMIN_RPC_ADDR ==="
+  ( cd "$GW_APP_DIR" && env CF_API_TOKEN="$CF_API_TOKEN" SRV_DOMAIN="$SRV_DOMAIN" \
+      ACME_STAGING="${ACME_STAGING:-no}" GATEWAY_ADMIN_RPC_ADDR="$GATEWAY_ADMIN_RPC_ADDR" \
+      bash bootstrap-cluster.sh "$GATEWAY_ADMIN_RPC_ADDR" )
+  echo
+  echo "Done. Verify the wildcard cert landed (CertResolver should show 1+ domains):"
+  echo "  NAME=dstack-gateway CONTAINER=dstack-gateway-1 worker-ctl.sh logs | grep -iE 'CertResolver|domain|certificate'"
+  exit 0
+fi
 
 # ---------------------------------------------------------------------------------------------------
 # Build the gateway app-compose (NON-mutating) and compute app-id, mirroring deploy-to-vmm.sh.
@@ -261,10 +275,12 @@ if [ "$MODE" = deploy ]; then
   echo "Gateway CVM deployed (name=$APP_NAME, app-id=$APP_ID). Watch boot:"
   echo "  NAME=$APP_NAME CONTAINER=dstack-gateway-1 worker-ctl.sh follow"
   echo "REMAINING live steps (operator):"
-  echo "  L3: set gateway_urls=[\"$MY_URL\"] in /home/$NODE_USER/meta-dstack/build/vmm.toml + restart vmm"
+  echo "  L3: NONE — do NOT edit vmm.toml + restart the vmm. Every CVM (kms/workers/gateway) shares the"
+  echo "      outlayer-dstack-vmm.service cgroup, so 'systemctl restart' KILLS them all. The keystore"
+  echo "      registers via a PER-VM gateway URL at deploy instead: vmm-cli deploy --gateway-url $MY_URL"
   echo "  L4: (cd $GW_APP_DIR && env CF_API_TOKEN=\"\$(cat $CF_TOKEN_FILE)\" SRV_DOMAIN=$SRV_DOMAIN \\"
   echo "        ACME_STAGING=${ACME_STAGING:-no} GATEWAY_ADMIN_RPC_ADDR=127.0.0.1:9203 bash bootstrap-cluster.sh 127.0.0.1:9203)"
-  echo "  L5: redeploy keystore with --gateway + port_policy (see docs/gateway.md)"
+  echo "  L5: deploy keystore with --gateway + --gateway-url $MY_URL + port_policy (see docs/gateway.md)"
   exit 0
 fi
 
@@ -311,10 +327,11 @@ echo "  #           NET_MODE=user GATEWAY_ADMIN_RPC_ADDR=127.0.0.1:9203 ADMIN_LI
 echo "  #           GUEST_AGENT_ADDR=127.0.0.1:9206 ... ./deploy-to-vmm.sh)"
 echo "  #      but it does NOT do the /etc/hosts KMS dance — wrap it the same way if you go that route."
 echo
-echo "  # (L3) vmm.toml — point the cluster at the gateway, then restart vmm (LIVE)."
-echo "  #      Set gateway_urls in /home/$NODE_USER/meta-dstack/build/vmm.toml:"
-echo "  #        gateway_urls = [\"$MY_URL\"]"
-echo "  #      then restart the vmm service (operator's normal restart procedure)."
+echo "  # (L3) NONE — do NOT edit vmm.toml + restart the vmm. Every CVM (kms/workers/gateway) shares the"
+echo "  #      outlayer-dstack-vmm.service cgroup, so 'systemctl restart' KILLS them all. The keystore"
+echo "  #      registers via a PER-VM gateway URL at deploy instead (40-deploy-keystore.sh passes it):"
+echo "  #        vmm-cli deploy ... --gateway-url $MY_URL"
+echo "  #      (gateway_urls in vmm.toml is only a fallback default for CVMs deployed without --gateway-url.)"
 echo
 echo "  # (L4) bootstrap ACME/DNS/ZT-Domain via the gateway admin RPC (LIVE; once per cluster)."
 echo "  #      Run AFTER the gateway CVM is up and its admin RPC is reachable on 127.0.0.1:9203:"

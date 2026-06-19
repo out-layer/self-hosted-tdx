@@ -79,17 +79,15 @@ the `/etc/hosts` KMS dance + a clean-DNS reboot (same as `40-deploy-keystore.sh`
 remaining live steps:
 
 ```bash
-# L3 — point the cluster at the gateway, then restart vmm (LIVE; cluster-wide flag).
-#   set in /home/outlayer/meta-dstack/build/vmm.toml:
-gateway_urls = ["https://gateway.dstack.outlayer.ai:9202"]
-#   then restart the dstack-vmm service. (Existing worker CVMs do NOT join the mesh unless redeployed.)
+# L3 — NOT a vmm restart. ⚠️ DO NOT `systemctl restart outlayer-dstack-vmm.service`: every CVM
+#   (kms, workers, gateway) runs inside that service's cgroup, so restarting it KILLS them all.
+#   The keystore registers with the gateway via a PER-VM URL at deploy time (no vmm.toml/restart):
+#     vmm-cli deploy ... --gateway-url https://gateway.dstack.outlayer.ai:9202     (40-deploy-keystore.sh passes this)
+#   gateway_urls in vmm.toml is only a fallback default for CVMs deployed without --gateway-url.
 
-# L4 — obtain the wildcard cert via in-CVM ACME DNS-01 (LIVE; once per cluster). Run AFTER the
-#   gateway CVM is up and its admin RPC is live on 127.0.0.1:9203:
-(cd /home/outlayer/meta-dstack/dstack/gateway/dstack-app && \
-   env CF_API_TOKEN="$(cat /home/outlayer/gateway-cf-token)" SRV_DOMAIN=dstack.outlayer.ai \
-       ACME_STAGING=no GATEWAY_ADMIN_RPC_ADDR=127.0.0.1:9203 \
-   bash bootstrap-cluster.sh 127.0.0.1:9203)
+# L4 — obtain the *.dstack.outlayer.ai wildcard cert via in-CVM ACME DNS-01 (LIVE; once per cluster).
+#   Run AFTER the gateway CVM is up (admin RPC live on 127.0.0.1:9203):
+sudo -u outlayer ./40-deploy-gateway.sh bootstrap
 
 # L5 — (keystore step) redeploy the keystore with --gateway + a port policy so ONLY :8081 is reachable
 #   through the gateway (never the guest-agent :8090 logs). vmm-cli compose has no flag for this, so
