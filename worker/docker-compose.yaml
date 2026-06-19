@@ -27,7 +27,11 @@ services:
       TEE_MODE: ${TEE_MODE}
       USE_TEE_REGISTRATION: ${USE_TEE_REGISTRATION}
       COMPILATION_ENABLED: ${COMPILATION_ENABLED}
-      COMPILATION_MODE: ${COMPILATION_MODE:-native}
+      # NOTE: do NOT pass COMPILATION_MODE to an EXECUTION worker. The worker rejects
+      # COMPILATION_MODE=native + EXECUTION_ENABLED=true (a native compiler could exfiltrate
+      # env secrets). This is an execution-only worker (COMPILATION_ENABLED=false), so leave
+      # COMPILATION_MODE unset — exactly like the Phala prod compose. (The env file may still
+      # carry it harmlessly; the worker only sees what this compose passes.)
       EXECUTION_ENABLED: ${EXECUTION_ENABLED}
       # Init account pays gas for worker registration when USE_TEE_REGISTRATION=true.
       INIT_ACCOUNT_ID: ${INIT_ACCOUNT_ID:-}
