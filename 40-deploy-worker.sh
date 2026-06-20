@@ -103,6 +103,9 @@ echo "[3/3] Deploy worker CVM (outbound-only)..."
 # vmm does NOT auto-map 8090 without it. A FIXED port (e.g. 9210) collides as soon as a 2nd worker
 # is deployed ("Could not set up host forwarding rule" -> qemu crash-loops). So pick a FREE host
 # port per worker; worker-ctl.sh discovers the live port afterwards (vmm may reassign on restart).
+# The host port is bound to 127.0.0.1 (loopback): it is NOT WAN-exposed, so the host firewall
+# (45-firewall.sh) deliberately does NOT open the 9210-9999 range (ufw always allows loopback).
+# Just keep 9210-9999 free of OTHER host listeners (a port-allocation concern, not a firewall one).
 AGENT_HOST_PORT=""
 for p in $(seq 9210 9999); do
   ss -ltn 2>/dev/null | grep -q "127.0.0.1:$p " || { AGENT_HOST_PORT=$p; break; }

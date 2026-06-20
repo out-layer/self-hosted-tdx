@@ -154,8 +154,8 @@ cp worker/worker.env.template worker/worker.env   # fill secrets (NOT committed)
 First boot fails registration ("measurements not approved" / collateral mismatch).
 Harvest the worker's 5 measurements from its logs, then (register-contract **owner**):
 ```bash
-# add this node's collateral (per-FMSPC) and measurements:
-near contract call-function as-transaction <register-contract> update_collateral  json-args '{"fmspc":"<FMSPC>","collateral":"<json>"}' …  sign-as <owner>
+# add this node's collateral at its FMSPC slot (index: 0=Phala, 1=self-hosted) and measurements:
+near contract call-function as-transaction <register-contract> update_collateral  json-args '{"collateral":"<json>","index":1}' …  sign-as <owner>
 near contract call-function as-transaction <register-contract> add_approved_measurements json-args '{...5 measurements...}' … sign-as <owner>
 ```
 > Requires the **Phase-1 per-FMSPC collateral** contract upgrade (`quote_collateral:
