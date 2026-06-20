@@ -9,8 +9,8 @@
 #   dstack decrypts the env inside the CVM and docker-compose substitutes at runtime.
 # - the worker is outbound-only (polls the coordinator); no inbound ports.
 # - /var/run/dstack.sock is provided by dstack inside the CVM (TDX quotes).
-# - mirrors docker/docker-compose.phala.yml (single worker service, no compiler sidecar
-#   since COMPILATION_ENABLED=false; no docker.sock — execution is in-process wasmedge).
+# - single worker service, no compiler sidecar (COMPILATION_ENABLED=false); no docker.sock —
+#   execution is in-process wasmedge.
 
 services:
   worker:
@@ -30,7 +30,7 @@ services:
       # NOTE: do NOT pass COMPILATION_MODE to an EXECUTION worker. The worker rejects
       # COMPILATION_MODE=native + EXECUTION_ENABLED=true (a native compiler could exfiltrate
       # env secrets). This is an execution-only worker (COMPILATION_ENABLED=false), so leave
-      # COMPILATION_MODE unset — exactly like the Phala prod compose. (The env file may still
+      # COMPILATION_MODE unset for an execution-only worker. (The env file may still
       # carry it harmlessly; the worker only sees what this compose passes.)
       EXECUTION_ENABLED: ${EXECUTION_ENABLED}
       # Init account pays gas for worker registration when USE_TEE_REGISTRATION=true.

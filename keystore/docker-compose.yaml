@@ -14,8 +14,8 @@
 #   tests); production traffic arrives over the WireGuard mesh / dstack-gateway, NOT this
 #   port. The compose just declares the container port; the host mapping is set at deploy.
 # - /var/run/dstack.sock is provided by dstack inside the CVM (TDX quotes for registration).
-# - mirrors docker/docker-compose.keystore-phala.yml (single keystore service). No
-#   COMPILATION_MODE / executor knobs — this is the keystore, not the worker.
+# - single keystore service: no COMPILATION_MODE / executor knobs — this is the keystore,
+#   not the worker.
 
 services:
   keystore:
@@ -42,7 +42,7 @@ services:
       MPC_CONTRACT_ID: ${MPC_CONTRACT_ID}
       MPC_DOMAIN_ID: ${MPC_DOMAIN_ID}
       MPC_PUBLIC_KEY: ${MPC_PUBLIC_KEY}
-      # dstack guest socket (TDX quotes). Same path inside the CVM as on Phala.
+      # dstack guest socket (TDX quotes). Standard dstack socket path inside the CVM.
       DSTACK_SIMULATOR_ENDPOINT: ${DSTACK_SIMULATOR_ENDPOINT}
       LOG_MASTER_KEY_HASH: ${LOG_MASTER_KEY_HASH:-false}
       RUST_LOG: ${RUST_LOG:-info,keystore_worker=debug}
@@ -52,7 +52,7 @@ services:
     # connects to the keystore over the WireGuard mesh (gateway -> <wg-ip>:8081) and the deploy's
     # loopback smoke-test port maps to the guest's :8081 — both need the container port on the CVM
     # network, not buried inside the container's docker netns. Without this the gateway gets
-    # "connection refused" (os error 111). (Mirrors docker-compose.keystore-phala.yml.)
+    # "connection refused" (os error 111).
     ports:
       - "${SERVER_PORT}:${SERVER_PORT}"
     volumes:
