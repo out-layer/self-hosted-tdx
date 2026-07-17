@@ -35,8 +35,25 @@ fi
 sed -i 's/^TDX_SETUP_ATTESTATION=0/TDX_SETUP_ATTESTATION=1/' /root/tdx/setup-tdx-config
 ( cd /root/tdx && ./setup-tdx-host.sh )   # installs TDX kernel + DCAP; reboot afterwards
 
-echo "[3/3] Done. Verify services + reboot:"
+echo "[3/4] Freeze the host so nothing bounces the CVMs (see docs/node-hardening.md)..."
+# A restart of dockerd/containerd/dstack-vmm restarts the QEMU guests; for the keystore that
+# wedges custody (ephemeral key + 30-min DAO-approval timeout). So: no unattended upgrades, no
+# needrestart auto-restart, and the runtime/QEMU stack pinned. See docs/node-hardening.md.
+systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
+systemctl mask unattended-upgrades.service apt-daily-upgrade.service packagekit.service 2>/dev/null || true
+systemctl disable --now fwupd-refresh.timer 2>/dev/null || true
+printf 'APT::Periodic::Update-Package-Lists "0";\nAPT::Periodic::Unattended-Upgrade "0";\n' \
+  > /etc/apt/apt.conf.d/20auto-upgrades
+mkdir -p /etc/needrestart/conf.d
+printf "# Never auto-restart services on this TDX host — a runtime restart bounces the CVMs.\n\$nrconf{restart} = 'l';\n" \
+  > /etc/needrestart/conf.d/50-no-auto-restart.conf
+apt-mark hold \
+  containerd docker.io ipxe-qemu libslirp0 libvirt-daemon-driver-qemu \
+  qemu-system-common qemu-system-data qemu-system-x86 qemu-utils 2>/dev/null || true
+
+echo "[4/4] Done. Verify services + reboot:"
 echo "  systemctl is-active qgsd pccs docker"
+echo "  apt-mark showhold        # expect the 9 runtime/qemu pkgs"
 echo "  REBOOT, then: sudo dmesg | grep -i tdx   # expect 'virt/tdx: module initialized'"
 echo "Next: set the Intel PCS API key in /opt/intel/sgx-dcap-pccs/config/default.json (.ApiKey),"
 echo "      restart pccs, and push the platform manifest (see README Step 2)."
