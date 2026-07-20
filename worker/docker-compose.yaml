@@ -26,6 +26,8 @@ services:
       OPERATOR_PRIVATE_KEY: ${OPERATOR_PRIVATE_KEY:-}
       TEE_MODE: ${TEE_MODE}
       USE_TEE_REGISTRATION: ${USE_TEE_REGISTRATION}
+      # Signature scheme for the on-chain worker key: ed25519 (default) or ml-dsa-65.
+      WORKER_KEY_TYPE: ${WORKER_KEY_TYPE:-ed25519}
       COMPILATION_ENABLED: ${COMPILATION_ENABLED}
       # NOTE: do NOT pass COMPILATION_MODE to an EXECUTION worker. The worker rejects
       # COMPILATION_MODE=native + EXECUTION_ENABLED=true (a native compiler could exfiltrate
