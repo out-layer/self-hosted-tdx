@@ -35,6 +35,8 @@ services:
       USE_TEE_REGISTRATION: ${USE_TEE_REGISTRATION}
       # Signature scheme for the keystore's registration key: ed25519 (default) or ml-dsa-65.
       KEYSTORE_KEY_TYPE: ${KEYSTORE_KEY_TYPE:-ed25519}
+      # Which worker signature schemes this keystore accepts for TEE-session auth.
+      TEE_ALLOWED_KEY_TYPES: ${TEE_ALLOWED_KEY_TYPES:-ed25519}
       OPERATOR_ACCOUNT_ID: ${OPERATOR_ACCOUNT_ID}
       KEYSTORE_DAO_CONTRACT: ${KEYSTORE_DAO_CONTRACT}
       # Init account self-submits the keystore registration (submit_keystore_registration) on boot.
