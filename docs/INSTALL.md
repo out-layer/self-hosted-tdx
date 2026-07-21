@@ -11,6 +11,9 @@ mainnet** side by side (single gateway, single KMS, one keystore per network).
 > This is a clean install + setup guide, NOT a data migration. Key continuity (deriving the SAME
 > keystore master as a previous deployment) is a per-keystore concern — see `keystore.md` Prereq C.
 
+> Adding an **extra worker-only node** to a fleet that already runs a gateway + keystore? Take the
+> short path instead: `setup-new-node.md` (host → vmm → per-node KMS → worker; steps 4/5 skipped).
+
 ## Per-node values to set (everything else is fixed for the OutLayer project)
 
 Fill these for the new server before you start; they thread through the steps below.
