@@ -193,6 +193,56 @@ TAIL=1000 outlayer logs testnet-worker-040-1
 
 Env passthrough still works: `NAME=`, `CONTAINER=`, `TAIL=`, `VMM_URL=`.
 
+## 7. Collateral tooling — `dcap-qvl` on the node
+
+Only needed when you have to (re)generate the Intel collateral for this platform: Intel refreshes
+TCB info / CRLs roughly monthly, and registration then fails with a TCB or collateral error. The
+collateral is **per-FMSPC, not per-machine and not per-network**, so one node of a given platform can
+produce it for the whole fleet and both networks — but every node should be able to, so losing one
+box does not block the fleet.
+
+Build the patched CLI (~30 s; Rust is already installed from step 1):
+
+```bash
+su - outlayer
+git clone --branch v0.3.12 https://github.com/Phala-Network/dcap-qvl.git ~/dcap-qvl   # commit a854bd2
+cd ~/dcap-qvl
+git apply ~/self-hosted-tdx/tools/dcap-qvl-0.3.12-collateral-dump.patch
+cd cli && cargo build --release
+```
+
+The patch is two hunks: dump `QuoteCollateralV3` to `/tmp/our_collateral.json` after fetching, and
+`danger_accept_invalid_certs(true)` so the CLI talks to the node's **local** PCCS, which serves a
+self-signed cert on `https://localhost:8081`.
+
+Any TDX quote from this host works as input — the collateral is per-platform, not per-quote. The
+guest agent exposes no quote RPC on its host port, so take one out of a running CVM's `app_cert`
+(X.509 extension OID `1.3.6.1.4.1.62397.1.8`):
+
+```bash
+python3 ~/self-hosted-tdx/tools/extract-platform-quote.py > ~/platform-quote.hex   # default: KMS CVM agent :11005
+cd /tmp && PCCS_URL=https://localhost:8081 ~/dcap-qvl/cli/target/release/dcap-qvl verify --hex ~/platform-quote.hex
+#   -> "Quote verified", status UpToDate, and /tmp/our_collateral.json written
+```
+
+Then pull it to your laptop **in canonical form** and cache it in the register-contract. Do not plain
+`scp` it: the CLI's dump carries `pck_certificate_chain`, the PCK certificate of the CPU that
+produced the quote, so the raw file differs depending on which node you generated it on. Dropping it
+(and sorting keys) makes the committed file byte-identical whatever node it came from — the
+remaining nine fields are pure per-FMSPC Intel material:
+
+```bash
+cd ~/projects/near-offshore
+ssh root@<node> 'jq -S "del(.pck_certificate_chain)" /tmp/our_collateral.json' > scripts/our_collateral.json
+git diff scripts/our_collateral.json      # expect only Intel's issueDate/nextUpdate + signatures
+./scripts/update_collateral.sh scripts/our_collateral.json 1 testnet    # slot 1 = self-hosted FMSPC
+./scripts/update_collateral.sh scripts/our_collateral.json 1 mainnet    # same file, other network
+```
+
+`update_collateral.sh` also strips the field itself, so a collateral obtained any other way (Phala's
+API, an unpatched CLI) still uploads correctly — leaving it in pins the slot to one machine and
+every other node fails registration (see the troubleshooting entry below).
+
 ## Troubleshooting: the worker deploy dies right after "Deploy worker CVM"
 
 `scripts/deploy_tdx.sh` exits with no error after `[3/3] Deploy worker CVM (outbound-only)...`
@@ -273,6 +323,37 @@ sudo -u outlayer tar -czf /home/outlayer/outlayer-kms/imgsrv/dstack-0.5.11.tar.g
   -C /home/outlayer/meta-dstack/build/images/dstack-0.5.11 .
 tar -tzf /home/outlayer/outlayer-kms/imgsrv/dstack-0.5.11.tar.gz | head -3   # expect ./ and ./sha256sum.txt
 ```
+
+### Registration fails: "Signature is invalid for qe_report in quote"
+
+Measurements are approved, the worker builds a valid TDX quote, and `register_worker_key` panics
+with `TDX quote verification failed (signature/TCB/collateral mismatch): Signature is invalid for
+qe_report in quote`.
+
+This is a **fleet-level** problem, not a node problem: the collateral slot for this FMSPC contains a
+`pck_certificate_chain`, and dcap-qvl 0.3.11 *prefers* it over the chain embedded in the quote it is
+verifying (`verify.rs / verify_pck_cert_chain`). PCK certificates are per-CPU, so a slot carrying
+one is pinned to the machine whose quote generated it — the first node verifies, every later node
+fails. (Phala's slot has no such field, which is why one Phala collateral covers all their workers.)
+
+Fix once per network, as the register-contract owner — `scripts/update_collateral.sh` now strips the
+field automatically:
+
+```bash
+cd ~/projects/near-offshore
+./scripts/update_collateral.sh scripts/our_collateral.json 1 testnet   # slot 1 = self-hosted FMSPC
+```
+
+Check a slot before blaming a node:
+
+```bash
+near contract call-function as-read-only worker.outlayer.<net> get_collaterals \
+  json-args '{}' network-config <net> now
+# every slot must be 9 keys; "pck_certificate_chain" present == pinned to one machine
+```
+
+The same applies to `worker.outlayer.near` and to `dao.outlayer.near` (keystore governance) before a
+second node registers there.
 
 ## Verify
 

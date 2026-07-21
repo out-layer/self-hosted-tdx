@@ -1,0 +1,40 @@
+diff --git a/cli/src/main.rs b/cli/src/main.rs
+index 59b629e..dfe5c03 100644
+--- a/cli/src/main.rs
++++ b/cli/src/main.rs
+@@ -100,6 +100,22 @@ async fn command_verify_quote(args: VerifyQuoteArgs) -> Result<()> {
+     };
+     eprintln!("Getting collateral from {pccs_url}...");
+     let collateral = get_collateral(&pccs_url, &quote).await?;
++    {
++        let cj = serde_json::json!({
++            "tcb_info_issuer_chain": collateral.tcb_info_issuer_chain,
++            "tcb_info": collateral.tcb_info,
++            "tcb_info_signature": hex::encode(&collateral.tcb_info_signature),
++            "qe_identity_issuer_chain": collateral.qe_identity_issuer_chain,
++            "qe_identity": collateral.qe_identity,
++            "qe_identity_signature": hex::encode(&collateral.qe_identity_signature),
++            "pck_crl_issuer_chain": collateral.pck_crl_issuer_chain,
++            "root_ca_crl": hex::encode(&collateral.root_ca_crl),
++            "pck_crl": hex::encode(&collateral.pck_crl),
++            "pck_certificate_chain": collateral.pck_certificate_chain,
++        });
++        std::fs::write("/tmp/our_collateral.json", serde_json::to_string(&cj).unwrap()).expect("write collateral");
++        eprintln!("=== collateral written to /tmp/our_collateral.json ===");
++    }
+     let now = std::time::SystemTime::now()
+         .duration_since(std::time::UNIX_EPOCH)?
+         .as_secs();
+diff --git a/src/collateral.rs b/src/collateral.rs
+index 8e6188c..2f14cae 100644
+--- a/src/collateral.rs
++++ b/src/collateral.rs
+@@ -244,7 +244,7 @@ fn extract_fmspc_and_ca(pem_chain: &str) -> Result<(String, &'static str)> {
+ 
+ /// Build HTTP client with appropriate settings.
+ fn build_http_client() -> Result<reqwest::Client> {
+-    let builder = reqwest::Client::builder();
++    let builder = reqwest::Client::builder().danger_accept_invalid_certs(true);
+     #[cfg(not(feature = "js"))]
+     let builder = builder.timeout(Duration::from_secs(180));
+     Ok(builder.build()?)
