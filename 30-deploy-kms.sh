@@ -36,10 +36,10 @@ APP="$DSTACK/kms/dstack-app"
 # OS image hash (auth-simple osImages entry) = digest.txt of the guest image.
 OS_HASH="0x$(cat "$BUILD/images/$OS_IMAGE/digest.txt")"
 
-echo "=== [1/7] bun (auth-simple runtime) ==="
+echo "=== [1/8] bun (auth-simple runtime) ==="
 sudo -u "$NODE_USER" -H bash -lc "command -v bun >/dev/null || (curl -fsSL https://bun.sh/install | bash)"
 
-echo "=== [2/7] auth-simple: bind 127.0.0.1 + install deps ==="
+echo "=== [2/8] auth-simple: bind 127.0.0.1 + install deps ==="
 # Bind loopback (secure). CVMs still reach it via 10.0.2.2 (qemu user-net -> host loopback),
 # the same path the local-key-provider uses on :3443. sed delim is '#' ('||' + '/' in repl).
 if ! grep -q "hostname:" "$AS/index.ts"; then
@@ -47,19 +47,38 @@ if ! grep -q "hostname:" "$AS/index.ts"; then
 fi
 sudo -u "$NODE_USER" -H bash -lc "cd '$AS' && $BUN install"
 
-echo "=== [3/7] auth-config.json (osImages set; kms.mrAggregated empty) ==="
-# NOTE: empty kms.mrAggregated is fine for a SINGLE primary KMS. /bootAuth/kms is only
-# called for KMS HA onboarding (GetKmsKey); the primary unseals its root key locally
-# (local-key-provider) on restart and never consults the webhook for itself. App (worker)
-# entries are added later by 40-deploy-worker.sh (appId + composeHash).
+echo "=== [3/8] auth-config.json (osImages set; kms.mrAggregated filled in step 6) ==="
+# kms.mrAggregated starts EMPTY because the value is only knowable after the KMS CVM exists (it is
+# a hash over that CVM's MRTD+RTMR0-3, so it differs per node AND per KMS redeploy). Step 6 reads it
+# from the running CVM and writes it back here.
+# It is NOT optional: /bootAuth/kms gates Onboard.Bootstrap too, not just KMS HA onboarding — with
+# an empty list the KMS refuses to bootstrap ("boot denied: aggregated MR not allowed"), stays in
+# onboard mode on plain http, and every `vmm-cli deploy --kms-url` then dies on the TLS handshake.
+# App (worker) entries are handled by allowAnyApp (kms/apply-auth-simple.sh).
 sudo -u "$NODE_USER" mkdir -p "$KMSDIR"
-cat > "$KMSDIR/auth-config.json" <<JSON
+if [ -s "$KMSDIR/auth-config.json" ]; then
+  echo "  keeping existing $KMSDIR/auth-config.json (osImages refreshed)"
+  sudo -u "$NODE_USER" python3 - "$KMSDIR/auth-config.json" "$OS_HASH" <<'PY'
+import json, sys
+p, os_hash = sys.argv[1], sys.argv[2]
+c = json.load(open(p))
+c.setdefault("osImages", [])
+if os_hash not in c["osImages"]:
+    c["osImages"].append(os_hash)
+c.setdefault("kms", {}).setdefault("mrAggregated", [])
+c["kms"].setdefault("allowAnyDevice", True)
+c.setdefault("apps", {})
+json.dump(c, open(p, "w"), indent=2)
+PY
+else
+  cat > "$KMSDIR/auth-config.json" <<JSON
 {
   "osImages": ["$OS_HASH"],
   "kms": { "mrAggregated": [], "allowAnyDevice": true },
   "apps": {}
 }
 JSON
+fi
 chown -R "$NODE_USER:$NODE_USER" "$KMSDIR"
 
 cat > /etc/systemd/system/outlayer-kms-auth.service <<UNIT
@@ -86,7 +105,7 @@ systemctl enable --now outlayer-kms-auth
 sleep 2
 curl -s "http://127.0.0.1:$AUTH_PORT/" -o /dev/null -w "auth-simple GET /: %{http_code}\n"
 
-echo "=== [4/7] local OS-image server (the KMS verifies the guest image it boots) ==="
+echo "=== [4/8] local OS-image server (the KMS verifies the guest image it boots) ==="
 # [core.image] verify=true makes the KMS download $OS_IMAGE.tar.gz and check its hash against the
 # CVM it is asked to authorize, with a 2-minute download_timeout. Serving that ~180MB tarball from
 # the host (10.0.2.2:$IMGSRV_PORT, loopback-bound — slirp maps the CVM's 10.0.2.2 to host loopback,
@@ -118,7 +137,7 @@ sleep 1
 curl -s -o /dev/null -w "imgsrv HEAD $OS_IMAGE.tar.gz: %{http_code}\n" -I \
   "http://127.0.0.1:$IMGSRV_PORT/$OS_IMAGE.tar.gz"
 
-echo "=== [5/7] .env.simple + deploy KMS CVM (upstream deploy-simple.sh) ==="
+echo "=== [5/8] .env.simple + deploy KMS CVM (upstream deploy-simple.sh) ==="
 TOKEN_FILE="$KMSDIR/kms-admin-token.txt"
 [ -f "$TOKEN_FILE" ] || { openssl rand -hex 16 > "$TOKEN_FILE"; chmod 600 "$TOKEN_FILE"; chown "$NODE_USER:$NODE_USER" "$TOKEN_FILE"; }
 # KMS_IMAGE must be set HERE (see the note at the top): deploy-simple.sh's own default only lands
@@ -135,21 +154,53 @@ KMS_IMAGE=$KMS_IMAGE
 ADMIN_TOKEN=$(cat "$TOKEN_FILE")
 ENV
 chmod 600 "$APP/.env.simple"; chown "$NODE_USER:$NODE_USER" "$APP/.env.simple"
-# Refuse to stack a second KMS: deploy-simple.sh always creates a NEW CVM named 'kms', and two of
-# them fight over :$KMS_PORT. Deliberately NOT auto-removed — deleting a HEALTHY KMS CVM destroys
-# its sealed root key and every app key derived from it. Only a KMS that never came up is safe to
-# drop by hand:  NAME=kms ./worker-ctl.sh remove
+# Never stack a second KMS: deploy-simple.sh always creates a NEW CVM named 'kms' and two of them
+# fight over :$KMS_PORT. If one exists we SKIP the deploy and resume at the allowlist+bootstrap
+# steps — that is the normal path when a first run died before bootstrap. Deliberately never
+# auto-removed: deleting a HEALTHY KMS CVM destroys its sealed root key and every app key derived
+# from it. To start over deliberately:  NAME=kms ./worker-ctl.sh remove
 if sudo -u "$NODE_USER" -H bash -lc \
      "python3 '$DSTACK/vmm/src/vmm-cli.py' --url '$VMM_RPC' lsvm 2>/dev/null" | grep -qw kms; then
-  echo "A CVM named 'kms' already exists on this vmm." >&2
-  echo "  healthy?  -> nothing to do; this script is not needed." >&2
-  echo "  broken?   -> NAME=kms $(dirname "$0")/worker-ctl.sh remove   # deletes CVM + disk" >&2
-  exit 1
+  echo "  a CVM named 'kms' already exists — skipping deploy, resuming at allowlist + bootstrap"
+else
+  # deploy-simple.sh skips its interactive confirm when stdin is not a tty (</dev/null).
+  sudo -u "$NODE_USER" -H bash -lc "cd '$APP' && ./deploy-simple.sh < /dev/null"
 fi
-# deploy-simple.sh skips its interactive confirm when stdin is not a tty (</dev/null).
-sudo -u "$NODE_USER" -H bash -lc "cd '$APP' && ./deploy-simple.sh < /dev/null"
 
-echo "=== [6/7] bootstrap KMS over RPC (no browser) ==="
+echo "=== [6/8] allowlist the KMS's own mr_aggregated (required before it may bootstrap) ==="
+# Authoritative source: the CVM's guest agent, which serves the measured TCB of the running VM.
+# (The same value shows up in `journalctl -u outlayer-kms-auth` as the denied boot request.)
+echo "  waiting for the KMS guest agent on :$GUEST_AGENT_PORT ..."
+MR_AGG=""
+for i in $(seq 1 30); do
+  MR_AGG=$(curl -s --max-time 5 "http://127.0.0.1:$GUEST_AGENT_PORT/prpc/Info?json" \
+    | python3 -c 'import sys,json
+try:
+    print(json.loads(json.load(sys.stdin)["tcb_info"])["mr_aggregated"])
+except Exception:
+    pass' 2>/dev/null || true)
+  [ -n "$MR_AGG" ] && break
+  sleep 6
+done
+[ -n "$MR_AGG" ] || { echo "Could not read mr_aggregated from the KMS guest agent" >&2; exit 1; }
+echo "  mr_aggregated: $MR_AGG"
+sudo -u "$NODE_USER" python3 - "$KMSDIR/auth-config.json" "0x$MR_AGG" <<'PY'
+import json, sys
+p, mr = sys.argv[1], sys.argv[2]
+c = json.load(open(p))
+lst = c.setdefault("kms", {}).setdefault("mrAggregated", [])
+norm = lambda h: h.lower().removeprefix("0x")
+if norm(mr) not in [norm(x) for x in lst]:
+    lst.append(mr)
+    json.dump(c, open(p, "w"), indent=2)
+    print("  added to kms.mrAggregated")
+else:
+    print("  already allowlisted")
+PY
+systemctl restart outlayer-kms-auth
+sleep 2
+
+echo "=== [7/8] bootstrap KMS over RPC (no browser) ==="
 echo "Waiting for the KMS onboard server (http on :$KMS_PORT) ..."
 for i in $(seq 1 30); do
   curl -s "http://127.0.0.1:$KMS_PORT/" -o /dev/null --max-time 4 2>/dev/null && break || sleep 6
@@ -161,7 +212,7 @@ curl -s -X POST "http://127.0.0.1:$KMS_PORT/prpc/Onboard.Finish?json" \
   -H "Content-Type: application/json" --data '{}' --max-time 30 || true
 sleep 7
 
-echo "=== [7/7] verify KMS is serving mTLS https ==="
+echo "=== [8/8] verify KMS is serving mTLS https ==="
 # After Finish the KMS switches to https on :$KMS_PORT (CVM:8000) and serves the KMS service.
 curl -sk -X POST "https://127.0.0.1:$KMS_PORT/prpc/GetMeta?json" \
   -H "Content-Type: application/json" --data '{}' --max-time 10 | head -c 300; echo

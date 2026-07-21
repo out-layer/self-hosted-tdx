@@ -234,6 +234,24 @@ NAME=kms /home/outlayer/self-hosted-tdx/worker-ctl.sh remove   # only ever a KMS
 cd /home/outlayer/self-hosted-tdx && ./30-deploy-kms.sh
 ```
 
+### KMS container runs, but https on :11001 stays dead
+
+`outlayer logs kms` shows `rpc error: KMS is not allowed to bootstrap / Caused by: boot denied:
+aggregated MR not allowed`, and `journalctl -u outlayer-kms-auth` shows the denied request. The KMS
+asks the auth-simple webhook for permission **to bootstrap itself**, and its own `mr_aggregated` —
+a hash over that CVM's MRTD+RTMR0-3, so unique per node *and* per KMS redeploy — was not in
+`kms.mrAggregated`. Without a successful bootstrap the KMS never switches from onboarding-http to
+mTLS-https, so `GetMeta` returns nothing and worker deploys keep failing on the TLS handshake.
+
+`30-deploy-kms.sh` step 6 now handles this: it reads the value from the CVM's guest agent, appends
+it to `auth-config.json`, restarts the webhook, then bootstraps. Re-running the script is the fix —
+it detects the existing `kms` CVM, skips the deploy, and resumes from there. The value by hand:
+
+```bash
+curl -s http://127.0.0.1:11005/prpc/Info?json \
+  | python3 -c 'import sys,json; print(json.loads(json.load(sys.stdin)["tcb_info"])["mr_aggregated"])'
+```
+
 ## Verify
 
 ```bash
