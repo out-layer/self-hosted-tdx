@@ -112,10 +112,20 @@ echo "=== [4/8] local OS-image server (the KMS verifies the guest image it boots
 # same path the key-provider uses) keeps it off the WAN and out of timeout territory.
 IMGSRV="$KMSDIR/imgsrv"
 sudo -u "$NODE_USER" mkdir -p "$IMGSRV"
-if [ ! -s "$IMGSRV/$OS_IMAGE.tar.gz" ]; then
-  echo "  fetching $OS_IMAGE.tar.gz once (~180MB)..."
-  sudo -u "$NODE_USER" curl -fsSL -o "$IMGSRV/$OS_IMAGE.tar.gz" \
-    "https://github.com/Dstack-TEE/meta-dstack/releases/download/$KMS_VER/$OS_IMAGE.tar.gz"
+# Pack it from the image THIS vmm boots, FLAT (members at the archive root: ./sha256sum.txt, ...).
+# Do NOT serve the GitHub release tarball: it nests everything under $OS_IMAGE/, and the KMS
+# extracts then runs `sha256sum -c sha256sum.txt` in the extraction root, so an app asking for keys
+# is denied with "Checksum verification failed: sha256sum: sha256sum.txt: No such file or directory"
+# — which surfaces as the CVM rebooting in a loop, not as a KMS error.
+TARBALL_OK=false
+if [ -s "$IMGSRV/$OS_IMAGE.tar.gz" ]; then
+  LIST="$(tar -tzf "$IMGSRV/$OS_IMAGE.tar.gz" 2>/dev/null || true)"
+  case "$LIST" in *"./sha256sum.txt"*) TARBALL_OK=true ;; esac
+  $TARBALL_OK || echo "  existing $OS_IMAGE.tar.gz has the wrong (nested) layout — repacking"
+fi
+if ! $TARBALL_OK; then
+  echo "  packing $OS_IMAGE.tar.gz from $BUILD/images/$OS_IMAGE ..."
+  sudo -u "$NODE_USER" tar -czf "$IMGSRV/$OS_IMAGE.tar.gz" -C "$BUILD/images/$OS_IMAGE" .
 fi
 cat > /etc/systemd/system/outlayer-imgsrv.service <<UNIT
 [Unit]
@@ -138,10 +148,43 @@ curl -s -o /dev/null -w "imgsrv HEAD $OS_IMAGE.tar.gz: %{http_code}\n" -I \
   "http://127.0.0.1:$IMGSRV_PORT/$OS_IMAGE.tar.gz"
 
 echo "=== [5/8] .env.simple + deploy KMS CVM (upstream deploy-simple.sh) ==="
+# The KMS container runs on the CVM's HOST network instead of publishing 8000. This is what the
+# first node runs; keep every node identical here, because compose-simple.yaml is MEASURED — any
+# difference changes the KMS app-compose hash and therefore its mr_aggregated.
+# Idempotent: skipped once applied, original kept as .orig.
+CS="$APP/compose-simple.yaml"
+if ! grep -q 'network_mode: host' "$CS"; then
+  cp "$CS" "$CS.orig"
+  python3 - "$CS" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+a = "    image: ${KMS_IMAGE}\n"
+assert a in s, "compose-simple.yaml: image anchor not found — dstack version drift?"
+s = s.replace(a, a + "    network_mode: host\n", 1)
+b = "    ports:\n      - 8000:8000\n"
+assert b in s, "compose-simple.yaml: ports anchor not found — dstack version drift?"
+s = s.replace(b, "", 1)
+open(p, "w").write(s)
+print("  patched compose-simple.yaml (network_mode: host; backup .orig)")
+PY
+else
+  echo "  compose-simple.yaml already on host networking"
+fi
+
 TOKEN_FILE="$KMSDIR/kms-admin-token.txt"
 [ -f "$TOKEN_FILE" ] || { openssl rand -hex 16 > "$TOKEN_FILE"; chmod 600 "$TOKEN_FILE"; chown "$NODE_USER:$NODE_USER" "$TOKEN_FILE"; }
 # KMS_IMAGE must be set HERE (see the note at the top): deploy-simple.sh's own default only lands
 # in the .env.simple it generates when the file is absent, which never happens once we write it.
+#
+# KNOWN, DELIBERATE difference from the FIRST node (deployed before this script was hardened):
+# it binds KMS_RPC_ADDR / the auth webhook / imgsrv on 0.0.0.0, this script binds them on the host
+# loopback. CVMs are unaffected — qemu slirp maps their 10.0.2.2 to the host loopback, which is the
+# same path the local key-provider on :3443 already uses, and all three were verified end-to-end on
+# the second node (webhook received the KMS boot request, the KMS downloaded the image from imgsrv,
+# and a worker CVM reached the KMS at kms.1022.dstack.org:11001). Loopback is strictly tighter than
+# relying on ufw alone. Align the first node DOWN to this when it is next redeployed; do not flip
+# this script UP to 0.0.0.0.
 cat > "$APP/.env.simple" <<ENV
 VMM_RPC=$VMM_RPC
 AUTH_WEBHOOK_URL=http://10.0.2.2:$AUTH_PORT
@@ -205,17 +248,30 @@ echo "Waiting for the KMS onboard server (http on :$KMS_PORT) ..."
 for i in $(seq 1 30); do
   curl -s "http://127.0.0.1:$KMS_PORT/" -o /dev/null --max-time 4 2>/dev/null && break || sleep 6
 done
-# prpc over JSON needs the '?json' suffix and the 'Onboard.' service prefix.
-curl -s -X POST "http://127.0.0.1:$KMS_PORT/prpc/Onboard.Bootstrap?json" \
-  -H "Content-Type: application/json" --data "{\"domain\":\"$KMS_DOMAIN\"}" --max-time 60 | head -c 400; echo
-curl -s -X POST "http://127.0.0.1:$KMS_PORT/prpc/Onboard.Finish?json" \
-  -H "Content-Type: application/json" --data '{}' --max-time 30 || true
-sleep 7
+# Already bootstrapped AND finished? Then the KMS answers https and there is nothing to do —
+# re-running Bootstrap would pointlessly re-key a KMS that may already have issued app keys.
+if curl -sk -o /dev/null --max-time 8 -X POST "https://127.0.0.1:$KMS_PORT/prpc/GetMeta?json" \
+     -H "Content-Type: application/json" --data '{}'; then
+  echo "  KMS already serves https — skipping bootstrap"
+else
+  # prpc over JSON needs the '?json' suffix and the 'Onboard.' service prefix.
+  # NOTE: capture, then truncate. Piping curl into `head -c` under `set -o pipefail` kills the
+  # script — head closes the pipe, curl dies of SIGPIPE, and Onboard.Finish never runs (which
+  # leaves the KMS bootstrapped but stuck on onboarding-http forever).
+  BOOT_RESP="$(curl -s -X POST "http://127.0.0.1:$KMS_PORT/prpc/Onboard.Bootstrap?json" \
+    -H "Content-Type: application/json" --data "{\"domain\":\"$KMS_DOMAIN\"}" --max-time 60 || true)"
+  echo "  Bootstrap: ${BOOT_RESP:0:200}"
+  FINISH_RESP="$(curl -s -X POST "http://127.0.0.1:$KMS_PORT/prpc/Onboard.Finish?json" \
+    -H "Content-Type: application/json" --data '{}' --max-time 30 || true)"
+  echo "  Finish: ${FINISH_RESP:0:200}"
+  sleep 7
+fi
 
 echo "=== [8/8] verify KMS is serving mTLS https ==="
 # After Finish the KMS switches to https on :$KMS_PORT (CVM:8000) and serves the KMS service.
-curl -sk -X POST "https://127.0.0.1:$KMS_PORT/prpc/GetMeta?json" \
-  -H "Content-Type: application/json" --data '{}' --max-time 10 | head -c 300; echo
-echo
+META="$(curl -sk -X POST "https://127.0.0.1:$KMS_PORT/prpc/GetMeta?json" \
+  -H "Content-Type: application/json" --data '{}' --max-time 10 || true)"
+[ -n "$META" ] || { echo "KMS still not serving https — check: outlayer logs kms" >&2; exit 1; }
+echo "  GetMeta: ${META:0:300}"
 echo "Done. The vmm already points CVMs at https://$KMS_DOMAIN:$KMS_PORT (vmm.toml kms_urls)."
 echo "Next: ./40-deploy-worker.sh <version>  (then add the worker app to $KMSDIR/auth-config.json)."

@@ -252,6 +252,28 @@ curl -s http://127.0.0.1:11005/prpc/Info?json \
   | python3 -c 'import sys,json; print(json.loads(json.load(sys.stdin)["tcb_info"])["mr_aggregated"])'
 ```
 
+### The worker CVM boots, then exits and reboots in a loop
+
+`outlayer status` flips the worker between `running` and `exited`, and `outlayer logs <vm>` says
+`no agent port`. The app never starts — read the **serial** log instead:
+
+```bash
+NAME=<vm> TAIL=900 ~/self-hosted-tdx/worker-ctl.sh serial > /tmp/w.log
+sed -n '/Requesting app keys/,/Failed to request app keys/p' /tmp/w.log
+```
+
+`App not allowed: Failed to verify os image hash: … Failed to download image <hash>: Checksum
+verification failed: sha256sum: sha256sum.txt: No such file or directory` means the KMS fetched the
+OS-image tarball from `IMAGE_DOWNLOAD_URL`, extracted it, and could not find `sha256sum.txt` at the
+extraction root. The **GitHub release tarball nests everything under `dstack-<ver>/`** and therefore
+cannot be served as-is. Pack it flat from the image the vmm actually boots (what step 4 now does):
+
+```bash
+sudo -u outlayer tar -czf /home/outlayer/outlayer-kms/imgsrv/dstack-0.5.11.tar.gz \
+  -C /home/outlayer/meta-dstack/build/images/dstack-0.5.11 .
+tar -tzf /home/outlayer/outlayer-kms/imgsrv/dstack-0.5.11.tar.gz | head -3   # expect ./ and ./sha256sum.txt
+```
+
 ## Verify
 
 ```bash
