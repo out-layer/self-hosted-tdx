@@ -370,6 +370,28 @@ A worker node needs **no new inbound ports** — workers poll the coordinator ou
 `45-firewall.sh`'s default-deny and only whatever that box already needed (SSH, and the NEAR node
 ports if it also runs one).
 
+## 8. Attestation agent (optional — puts the node on workers.outlayer.ai)
+
+The public attestation page shows a node only if an `attestation-agent` on it PUSHES to the portal;
+there is no discovery. The agent reads this node's dstack-vmm over loopback and posts a fleet
+snapshot every 5 min. Its source lives in the separate `out-layer/attestation-portal` repo (it
+shares a crate with the portal server); `install-agent.sh` here builds it **on the node** — never
+hand-copy a Mac build over (arm64 → `Exec format error` on the Linux node):
+
+```bash
+# from deploy/self-hosted-tdx/, building on the node from a portal checkout:
+PUSH_TOKEN=<ingest-token> ./install-agent.sh --node root@<ip> --node-id node-tdx-<name> \
+    --portal-repo ~/projects/attestation-portal --portal root@<portal-server>
+
+# or, adding to an existing fleet, clone a healthy node's binary + token (no build):
+./install-agent.sh --node root@<ip> --node-id node-tdx-<name> \
+    --from-node root@<existing-node> --token-from root@<existing-node> --portal root@<portal-server>
+```
+
+`--portal` opens this node's egress IP on the portal's `/ingest` allow-list (pinned per node); omit
+it and the script prints the one-liner to run there. The agent needs the `outlayer` user and the
+OutLayer vmm on `127.0.0.1:11000` — both already true after the steps above.
+
 ## Not needed on a worker-only node
 
 - `40-deploy-gateway.sh` — no public ingress
