@@ -258,7 +258,9 @@ echo "127.0.0.1 kms.1022.dstack.org # tmp" | sudo tee -a /etc/hosts
 python3 "$VMM_CLI" --url http://127.0.0.1:11000 deploy --name <vm> \
   --compose worker/app-compose.json --image dstack-0.5.11 \
   --env-file worker/.env.testnet-worker-tdx --kms-url https://kms.1022.dstack.org:11001 \
-  --vcpu 1 --memory 1G --disk 1G --port tcp:127.0.0.1:9210:8090
+  --vcpu 2 --memory 1G --disk 1G --port tcp:127.0.0.1:9210:8090
+# (vCPU/memory feed RTMR0, so a value different from 40-deploy-worker.sh's produces a different
+#  measurement set that has to be approved before the worker can register.)
 sudo sed -i '/kms.1022.dstack.org # tmp/d' /etc/hosts     # ALWAYS remove it again
 ```
 

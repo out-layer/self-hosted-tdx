@@ -112,13 +112,24 @@ for p in $(seq 9210 9999); do
 done
 [ -n "$AGENT_HOST_PORT" ] || { echo "No free host port in 9210-9999 for the agent" >&2; exit 1; }
 echo "  agent host port: $AGENT_HOST_PORT (initial; worker-ctl.sh discovers the live port)"
+# 2 vCPU rather than 1. One core also works — this is comfort, not a fix: tokio sizes its
+# runtime to the visible core count, so on a single-core CVM the ONE worker thread is parked for
+# the duration of every blocking keystore call the WASI host functions make (storage 30s / VRF
+# 10s timeouts), and heartbeats, task polling and the wasmtime epoch ticker stall with it. Task
+# execution stays sequential either way; that is enforced by the main loop, not the core count.
+#
+# vCPU count feeds the guest ACPI tables, so it CHANGES RTMR0 — a CVM redeployed with a
+# different value produces a new measurement set and must be approved again before it can
+# register. `scripts/deploy_tdx.sh` does that automatically (owner-signed, clear_others=false,
+# so previously approved sets survive); doing it by hand means running
+# `add_approved_measurements` before the worker can register.
 DEPLOY_OUT="$(python3 "$VMM_CLI" --url "$VMM_URL" deploy \
   --name "$APP_NAME" \
   --compose "$HERE/worker/app-compose.json" \
   --image "$IMAGE_OS" \
   --env-file "$ENVFILE" \
   --kms-url "$KMS_URL" \
-  --vcpu 1 --memory 1G --disk 1G \
+  --vcpu 2 --memory 1G --disk 1G \
   --port "tcp:127.0.0.1:$AGENT_HOST_PORT:8090" 2>&1)"
 echo "$DEPLOY_OUT"
 

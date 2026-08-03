@@ -121,10 +121,20 @@ Server should be 1.1.1.1/8.8.8.8).
 ### E. Scoped Cloudflare API token (stashed on the node)
 
 For in-CVM ACME DNS-01 (the ONLY production cert path in 0.5.11 — there is no operator-cert load
-path). Create it in the Cloudflare dashboard → My Profile → API Tokens → Create Token → Custom token:
+path). Create it as an **Account-owned** token (Manage Account → API Tokens), NOT a user token under
+My Profile — an account token survives the person who made it losing access. Create Token → Custom
+token:
 
-- **Permissions:** `Zone : DNS : Edit` **and** `Zone : Zone : Read`
+- **Permissions:** `Zone : Zone : Read` **and** `Zone : DNS : Edit`
+  (permission group ids `c8fed203ed3043cba015a93ad1616f1f` and `4755a26eedb94da69e1066d98aa820be`)
 - **Zone Resources:** Include → Specific zone → `outlayer.ai` (single zone only — least privilege)
+- **TTL:** no expiry. An expiring token is a silent time bomb: it kills renewal, not the running cert,
+  so nothing fails until the cert itself lapses ~10 days later.
+
+> If the zone is not in the account yet (a fresh account, or mid-migration), the specific-zone option
+> is not offered and you must scope to all account zones. That is a bootstrap compromise, not the end
+> state — once the zone lands, **Edit** the token and narrow it. Editing resources does NOT change the
+> token value (only **Roll** does), so nothing on the node needs re-pushing.
 
 Stash it on the node, never in git:
 
@@ -134,16 +144,89 @@ printf %s '<token>' > /home/outlayer/gateway-cf-token \
   && chmod 600 /home/outlayer/gateway-cf-token
 ```
 
-Verify it. A **zone-scoped token FAILS** `/user/tokens/verify` (that needs account scope) — test a
-zone call instead:
+Verify it. A **zone-scoped token FAILS** `/user/tokens/verify` (that needs account scope) — that is
+expected, not a fault. Test the two capabilities ACME actually uses instead. Listing the zone only
+proves `Zone:Read`; DNS-01 stands or falls on `DNS:Edit`, so prove that too by writing a throwaway
+TXT record and removing it:
 
 ```bash
-curl -s -H "Authorization: Bearer $(cat /home/outlayer/gateway-cf-token)" \
-  'https://api.cloudflare.com/client/v4/zones?name=outlayer.ai'   # -> "success":true
+TOKEN="$(cat /home/outlayer/gateway-cf-token)"
+
+# 1) Zone:Read — and capture the zone id (it CHANGES if the zone ever moves accounts)
+ZID=$(curl -s -H "Authorization: Bearer $TOKEN" \
+  'https://api.cloudflare.com/client/v4/zones?name=outlayer.ai' | jq -r '.result[0].id')
+[ -n "$ZID" ] && [ "$ZID" != null ] && echo "zone id: $ZID" || echo "FAIL: zone not visible to token"
+
+# 2) DNS:Edit — create then delete a probe TXT; both must print true
+REC=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  "https://api.cloudflare.com/client/v4/zones/$ZID/dns_records" \
+  -d '{"type":"TXT","name":"_acme-probe.outlayer.ai","content":"probe","ttl":60}')
+echo "$REC" | jq '.success'
+curl -s -X DELETE -H "Authorization: Bearer $TOKEN" \
+  "https://api.cloudflare.com/client/v4/zones/$ZID/dns_records/$(echo "$REC" | jq -r '.result.id')" \
+  | jq '.success'
 ```
 
 `40-deploy-gateway.sh` reads this file at deploy/bootstrap time and never echoes it. The deploy
 ABORTS if the file is missing or empty.
+
+### E2. Rotating the CF token on a LIVE gateway
+
+Needed whenever the token is revoked, expires, or the zone moves to another Cloudflare account (a
+zone move invalidates the old token AND changes the zone id).
+
+**Re-running `bootstrap` does NOT do this.** `bootstrap-cluster.sh` guards `CreateDnsCredential`
+behind "skip if any credential exists" — on a live cluster it prints `DNS credentials already exist
+(1), skipping` and then `Bootstrap complete`, leaving the dead token in place. Success output, no
+change made.
+
+The credential lives on the CVM's encrypted disk, not in `gateway-cf-token`; that file is only read
+at deploy/bootstrap. Rotate through the admin RPC instead (loopback-only, run it on the node):
+
+```bash
+A=127.0.0.1:9203
+curl -s "http://$A/prpc/ListDnsCredentials" | jq       # -> .credentials[].id, .default_id, cf_zone_id
+curl -s -X POST "http://$A/prpc/UpdateDnsCredential" -H 'Content-Type: application/json' \
+  -d '{"id":"<id>","cf_api_token":"<new token>"}'      # add "cf_zone_id" too if it is set and stale
+curl -s "http://$A/prpc/GetDefaultDnsCredential"       # cf_api_token is MASKED as cfat...<last4>
+```
+
+The API never returns the token in full, so verify the swap by the mask's last 4 characters, not by
+a hash. Then force an issuance to prove the new token is actually used — this is the only step that
+talks to Cloudflare and Let's Encrypt:
+
+```bash
+# RenewZtDomainCert, NOT RenewCert: RenewCert renews the proxy's own TLS cert, while the
+# *.<SRV_DOMAIN> wildcard is the ZT-domain cert. force=true is required outside the renew window.
+curl -s -X POST "http://$A/prpc/RenewZtDomainCert" -H 'Content-Type: application/json' \
+  -d '{"domain":"<SRV_DOMAIN>","force":true}' --max-time 240   # -> {"renewed":true,"not_after":...}
+curl -s "http://$A/prpc/ListZtDomains" | jq '.domains[].cert_status'
+```
+
+Issuance takes ~30-90s (DNS-01 propagation), so give curl a generous `--max-time`; a client-side
+timeout prints nothing while the renewal continues server-side. Confirm the served cert actually
+moved — a 200 from `UpdateDnsCredential` does not prove the resolver picked it up:
+
+```bash
+echo | openssl s_client -servername gateway.$SRV_DOMAIN -connect $PUBLIC_IP:443 2>/dev/null \
+  | openssl x509 -noout -enddate
+```
+
+Also update `/home/outlayer/gateway-cf-token` to match, or the next fresh deploy silently reinstates
+the dead token.
+
+Gotchas:
+
+- **Never set `ACME_STAGING=yes` on a live gateway.** `SetCertbotConfig` switches the ACME URL for the
+  whole resolver, so the next renewal fetches an untrusted staging cert and keystore HTTPS breaks.
+  There is no safe staging dry-run against a serving cluster.
+- Let's Encrypt allows **5 duplicate certificates per week** for the same name set. One or two
+  `RenewCert` verifications is fine; do not loop.
+- If a renewal wedges holding the lock, `ForceReleaseCertLock` clears it.
+- Bootstrap sets `renew_before_expiration_secs: 864000` (**10 days**) with an hourly check, so a dead
+  token surfaces only 10 days before expiry. Monitor the served `notAfter` from OFF the node (a node
+  that watches itself goes quiet exactly when it matters) and alert below 7 days — or widen the window
+  via `SetCertbotConfig` and raise the threshold to match.
 
 ### F. Gateway container image — pullable from inside the CVM
 
@@ -377,7 +460,8 @@ NAME=dstack-gateway worker-ctl.sh serial  # qemu boot/serial console (boot or at
 - **Switch keystores:** the canonical URL is `https://<keystore-app-id>-8081.dstack.outlayer.ai`. Run
   several keystores; flip which app-id you publish (or, with the same app-id, the gateway load-balances
   by WG handshake). Keep `KEYSTORE_BASE_URL` stable for workers/coordinator.
-- **Cert renewal** is automatic in the gateway CVM (distributed certbot). The CF token must stay valid.
+- **Cert renewal** is automatic in the gateway CVM (distributed certbot). The CF token must stay valid
+  — to replace one, see §E2 (re-running `bootstrap` will NOT do it).
 
 ## Redeploy / version bump
 
