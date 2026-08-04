@@ -182,6 +182,19 @@ if [ -n "$GATEWAY_URL" ]; then
   DEPLOY_GW_FLAG=(--gateway-url "$GATEWAY_URL")
   echo "  gateway-url (per-VM): $GATEWAY_URL"
 fi
+# --vcpu 4 (was 2). Headroom, not a measured need: the keystore's own CPU cost is small — a
+# signature is an HMAC derivation plus a couple of Ed25519 operations, so 100 req/s is a few
+# percent of one core, and the real limits are RPC round-trips and this being a single instance.
+# What the extra cores buy is margin against per-request CPU spikes (NEP-413 vote verification,
+# ECIES over a large secret map) and against anything that blocks a runtime thread — tokio sizes
+# its worker pool to the visible core count.
+#
+# vCPU and memory feed the guest ACPI tables, so BOTH change RTMR0/1: a CVM redeployed with a
+# different value produces a new measurement set and must be approved before it can register.
+# `scripts/deploy_tdx.sh` does that automatically (owner-signed, clear_others=false). Because the
+# keystore also needs a DAO vote within ~30 minutes of any restart, change this ONLY as part of a
+# release that was already going to restart it.
+#
 # --disk 20G: the keystore's persistent data is an ENCRYPTED ZFS volume; 1G (the worker's size) is
 # too small to create it + hold the keystore image, so the guest REBOOT-LOOPS at first boot (clean
 # `reboot`, not a panic, right after "Filesystem options: encryption=true, filesystem=Zfs"). Phala
@@ -193,7 +206,7 @@ DEPLOY_OUT="$(python3 "$VMM_CLI" --url "$VMM_URL" deploy \
   --image "$IMAGE_OS" \
   --env-file "$ENVFILE" \
   --kms-url "$KMS_URL" \
-  --vcpu 2 --memory 2G --disk 20G \
+  --vcpu 4 --memory 2G --disk 20G \
   "${DEPLOY_GW_FLAG[@]}" \
   --port "tcp:127.0.0.1:$AGENT_HOST_PORT:8090" \
   --port "tcp:127.0.0.1:$KS_HOST_PORT:8081" 2>&1)"
