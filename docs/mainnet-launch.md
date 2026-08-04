@@ -68,7 +68,7 @@ old `quote_collateral` → `collaterals[0]`).
       ```
 
 ### 3. Deploy the mainnet worker CVM
-- [ ] `cp deploy/self-hosted-tdx/worker/worker.env.template worker.env` and set MAINNET values
+- [ ] `cp deploy/self-hosted-tdx/worker/mainnet-worker.env.template deploy/self-hosted-tdx/worker/.env.mainnet-worker-tdx` and fill the `<SECRET>` placeholders (the mainnet values are already in it — do NOT start from the testnet template and edit)
       (diff against the testnet worker.env):
       - `API_BASE_URL=https://api.outlayer.fastnear.com`
       - `NEAR_RPC_URL=https://rpc.mainnet.fastnear.com`

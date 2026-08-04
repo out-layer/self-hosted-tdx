@@ -137,7 +137,7 @@ derives a distinct key per app-id, and on-chain registration is still gated by t
 ## Step 5 — Worker as a CVM (KMS mode, encrypted env)
 
 ```bash
-cp worker/worker.env.template worker/worker.env   # fill secrets (NOT committed)
+cp worker/<net>-worker.env.template worker/.env.<net>-worker-tdx   # fill secrets (NOT committed)
 ./40-deploy-worker.sh <version>                    # e.g. v0.1.35 — pins the verifiable image digest
 ```
 `40-deploy-worker.sh`:
@@ -184,7 +184,7 @@ The worker retries → registers → polls the coordinator → executes tasks.
 | `kms/kms.toml.template` | KMS app config |
 | `gateway/gateway.env.template` | Gateway deploy-time env (domain, public IP, image digest, mitigations) |
 | `worker/docker-compose.yaml` | Worker CVM compose (image pinned by digest; mounts dstack.sock) |
-| `worker/worker.env.template` | Worker env (non-secret defaults + secret placeholders) |
+| `worker/{testnet,mainnet}-worker.env.template` | Worker env per network (non-secret defaults + secret placeholders) |
 | `worker-ctl.sh` | Day-2 ops for any CVM by name (start/stop/restart/logs) |
 | `docs/bios.md` | Dell racadm BIOS commands |
 | `docs/gateway.md` | Gateway ingress runbook (TEE-terminated HTTPS for the keystore) |
