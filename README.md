@@ -117,22 +117,28 @@ The KMS is reachable from CVMs at `https://kms.1022.dstack.org:11001` (`*.1022.d
 = host; the bootstrap domain must match this, as it's the TLS cert CN). No public DNS needed.
 The vmm.toml `kms_urls` already points here.
 
-### Step 4b — apply the OutLayer auth-simple customization (`allowAnyApp` + `gatewayAppId`)
+### Step 4b — apply the OutLayer auth-simple customization (`allowAnyApp` + `devices` allowlist + `deviceId` logging)
 
 `30-deploy-kms.sh` deploys **stock** auth-simple: every app must be pre-listed under `apps`, and
-there is no `gatewayAppId` field. OutLayer adds a small, idempotent `index.ts` customization that
-(a) lets any app passing TCB + `osImages` boot without a per-`appId` allowlist entry, and (b) adds
-the `gatewayAppId` config field the KMS hands to gateway-enabled CVMs. **Required for the worker
+`gatewayAppId` stays empty until `40-deploy-gateway.sh deploy` sets it. OutLayer adds a small, idempotent `index.ts` customization that
+(a) lets any app passing TCB + `osImages` boot without a per-`appId` allowlist entry, (b) pins app
+and KMS boots to OUR hardware via a `devices` allowlist of `sha256(PPID)` (fail-closed when empty),
+and (c) logs `deviceId` in the boot-auth request lines. `40-deploy-gateway.sh` then fills
+`gatewayAppId` (an upstream field the KMS hands to gateway-enabled CVMs). **Required for the worker
 (avoids re-allowlisting on every redeploy) and a hard prerequisite for the gateway** (the gateway
 runbook in `docs/gateway.md` relies on both — without it the gateway CVM is denied at boot and the
 keystore reboot-loops with "Missing allowed dstack-gateway app id"):
 
 ```bash
-cd ~/self-hosted-tdx/kms && ./apply-auth-simple.sh   # patches index.ts + sets allowAnyApp=true + restarts the webhook
+# KMS_DEVICES = sha256(PPID) of this node (kms/README.md "Device allowlist"); the script refuses an empty list.
+cd ~/self-hosted-tdx/kms && KMS_DEVICES=0x<sha256(ppid)> ./apply-auth-simple.sh
+# then restart a NON-critical CVM and confirm isAllowed: true in `journalctl -u outlayer-kms-auth.service`
+# before touching the KMS CVM; a denial prints the real deviceId, fix the config and the CVM boots on its next retry.
 ```
 
 See `kms/README.md` for what it changes and the security rationale (single-tenant: the KMS still
-derives a distinct key per app-id, and on-chain registration is still gated by the register-contract).
+derives a distinct key per app-id, the device allowlist keeps it from serving our image on foreign
+TDX hardware, and on-chain registration is still gated by the register-contract / keystore DAO).
 
 ## Step 5 — Worker as a CVM (KMS mode, encrypted env)
 
@@ -175,7 +181,8 @@ The worker retries → registers → polls the coordinator → executes tasks.
 | `10-build-dstack.sh` | Build dstack + download guest image (pinned version) |
 | `20-start-vmm.sh` | Install vmm.toml + start dstack-vmm (systemd) |
 | `30-deploy-kms.sh` | auth-simple + KMS-CVM deploy + bootstrap |
-| `kms/apply-auth-simple.sh` | Step 4b: patch auth-simple (`allowAnyApp` + `gatewayAppId`) — idempotent |
+| `kms/apply-auth-simple.sh` | Step 4b: patch auth-simple (`allowAnyApp` + `devices` allowlist + `deviceId` logging) — idempotent, needs `KMS_DEVICES` |
+| `kms/test-apply-auth-simple.sh` | Tests for the above against an upstream auth-simple checkout (needs bun) |
 | `40-deploy-worker.sh` | Resolve verifiable digest + deploy worker CVM (KMS mode) |
 | `40-deploy-keystore.sh` | Deploy keystore CVM (KMS mode; gateway mode via `GATEWAY_URL`) |
 | `40-deploy-gateway.sh` | Deploy the dstack-gateway CVM (TEE TLS terminator) — see `docs/gateway.md` |

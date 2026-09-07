@@ -1,16 +1,26 @@
 {
-  "_comment": "auth-simple allowlist for the per-node dstack KMS (config-based authorization). Runs as a host webhook; the KMS-CVM and app-CVMs call it on boot. Fill the placeholders during deploy: osImages = the dstack guest OS image hash (from the guest image digest.txt / metadata); kms.mrAggregated = the KMS-CVM measurement CAPTURED at bootstrap (Onboard.GetAttestationInfo); apps = the worker app-compose hash(es) once known. See dstack/docs/auth-simple-operations.md.",
-
-  "osImages": ["0x<DSTACK_OS_IMAGE_HASH>"],
-
+  "_comment": "auth-simple allowlist for the per-node dstack KMS (config-based authorization). Runs as a host webhook; the KMS-CVM and app-CVMs call it on boot. Fill the placeholders during deploy: osImages = the dstack guest OS image hash (from the guest image digest.txt / metadata); kms.mrAggregated = the KMS-CVM measurement CAPTURED at bootstrap (Onboard.GetAttestationInfo); apps = one entry per app-compose hash (unused while allowAnyApp is true); devices / kms.devices = sha256(PPID) of OUR TDX hosts \u2014 written by kms/apply-auth-simple.sh, see kms/README.md \"Device allowlist\". Keys other than these are dropped by the schema, but a wrong VALUE type (e.g. a string inside apps) makes auth-simple fall back to an empty config and deny every boot. See dstack/docs/auth-simple-operations.md.",
+  "osImages": [
+    "0x<DSTACK_OS_IMAGE_HASH>"
+  ],
   "kms": {
-    "mrAggregated": ["0x<KMS_CVM_MEASUREMENT_CAPTURED_AT_BOOTSTRAP>"]
+    "mrAggregated": [
+      "0x<KMS_CVM_MEASUREMENT_CAPTURED_AT_BOOTSTRAP>"
+    ],
+    "allowAnyDevice": false,
+    "devices": [
+      "0x<SHA256_OF_NODE_PPID>"
+    ]
   },
-
   "apps": {
-    "_comment": "One entry per app (the OutLayer worker). compose-hash gates which app-compose the KMS will release keys to.",
     "<WORKER_APP_ID>": {
-      "composeHashes": ["0x<WORKER_APP_COMPOSE_HASH>"]
+      "composeHashes": [
+        "0x<WORKER_APP_COMPOSE_HASH>"
+      ]
     }
-  }
+  },
+  "allowAnyApp": true,
+  "devices": [
+    "0x<SHA256_OF_NODE_PPID>"
+  ]
 }

@@ -26,10 +26,11 @@
 #   - auth-simple PATCHED with the OutLayer customization (README step 4b / kms/apply-auth-simple.sh):
 #       * allowAnyApp:true        -> the gateway's per-deploy app-id boots WITHOUT a KMS allowlist entry
 #                                    (this is why L1 is skipped). Stock auth-simple DENIES it at boot.
-#       * the gatewayAppId field  -> this script auto-sets gatewayAppId in auth-config.json so the
-#                                    keystore can register; stock auth-simple has no such field and
-#                                    drops it, so the keystore reboot-loops "Missing allowed gateway app id".
-#     This script SOFT-CHECKS both below and warns if they're missing.
+#       * devices allowlist       -> must contain THIS host's sha256(PPID) or the gateway CVM is denied
+#                                    at boot (fail-closed when empty).
+#     gatewayAppId is an upstream field: this script auto-sets it in auth-config.json so the keystore
+#     can register (unset -> keystore reboot-loops "Missing allowed gateway app id").
+#     This script SOFT-CHECKS the patch + config below and warns if they're missing.
 #   - the gateway container image registry-pullable (common path: keep the pinned digest in
 #     gateway.env — it's already published; rebuild+push only on a version bump). See GATEWAY_IMAGE note.
 #   - DNS *.SRV_DOMAIN -> PUBLIC_IP gray-cloud; host resolver Cache=no-negative; scoped CF token stashed.
@@ -121,19 +122,19 @@ echo "  CF token: read from $CF_TOKEN_FILE (value never printed)"
 echo
 
 # --- Soft-check the auth-simple OutLayer patch (README step 4b / kms/apply-auth-simple.sh) ---
-# The gateway runbook depends on it twice: allowAnyApp (the per-deploy gateway app-id boots without a
-# KMS allowlist entry) AND the gatewayAppId field (so the keystore can register with this gateway).
-# Stock auth-simple has neither -> the gateway is denied at boot and/or the keystore reboot-loops.
+# The gateway runbook depends on it: allowAnyApp lets the per-deploy gateway app-id boot without a
+# KMS allowlist entry, and the node device allowlist must name THIS host or the gateway CVM is denied
+# at boot; the gatewayAppId field is upstream and is written by this script further down.
 # We only WARN (don't hard-fail): the files may live at a non-default path, and prep mode is harmless.
 AUTH_CONFIG="${AUTH_CONFIG:-/home/$NODE_USER/outlayer-kms/auth-config.json}"
 AUTH_INDEX="${AUTH_SIMPLE_INDEX:-$DSTACK/kms/auth-simple/index.ts}"
-if [ -f "$AUTH_INDEX" ] && ! grep -q "allowAnyApp" "$AUTH_INDEX" 2>/dev/null; then
-  echo "WARN: auth-simple index.ts is NOT patched (no allowAnyApp/gatewayAppId): $AUTH_INDEX"
+if [ -f "$AUTH_INDEX" ] && ! { grep -q "allowAnyApp" "$AUTH_INDEX" && grep -q "deviceAllowlist" "$AUTH_INDEX"; } 2>/dev/null; then
+  echo "WARN: auth-simple index.ts is NOT fully patched (allowAnyApp + device allowlist): $AUTH_INDEX"
   echo "      The gateway will be DENIED at boot and the keystore will reboot-loop."
-  echo "      Run README step 4b first:  cd $(dirname "$0")/kms && ./apply-auth-simple.sh"
+  echo "      Run README step 4b first:  cd $(dirname "$0")/kms && KMS_DEVICES=0x<sha256(ppid)> ./apply-auth-simple.sh"
 fi
-if [ -f "$AUTH_CONFIG" ] && ! grep -q '"allowAnyApp"[[:space:]]*:[[:space:]]*true' "$AUTH_CONFIG" 2>/dev/null; then
-  echo "WARN: $AUTH_CONFIG does not have allowAnyApp=true — run kms/apply-auth-simple.sh (README step 4b)."
+if [ -f "$AUTH_CONFIG" ] && ! python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if c.get("allowAnyApp") is True and c.get("devices") else 1)' "$AUTH_CONFIG" 2>/dev/null; then
+  echo "WARN: $AUTH_CONFIG lacks allowAnyApp=true and/or a non-empty devices allowlist — run kms/apply-auth-simple.sh (README step 4b)."
 fi
 echo
 

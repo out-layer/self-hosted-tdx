@@ -48,38 +48,40 @@ assumes ALL of these are done:
 | Steps 0–2 | TDX host + attestation stack (QGS/PCCS), FMSPC recorded |
 | Step 3 (`20-start-vmm.sh`) | the outlayer-owned `dstack-vmm` on `127.0.0.1:11000` |
 | Step 4 (`30-deploy-kms.sh`) | the per-node KMS-as-CVM + auth-simple webhook |
-| **Step 4b (`kms/apply-auth-simple.sh`)** | **`allowAnyApp:true` + the `gatewayAppId` config field — MANDATORY (see B)** |
+| **Step 4b (`KMS_DEVICES=… kms/apply-auth-simple.sh`)** | **`allowAnyApp:true` + this node's device allowlist — MANDATORY (see B)** |
 
 See `../README.md`. **Do NOT skip Step 4b** — it is the single most common reason a fresh-server
 gateway fails. Details below.
 
-### B. auth-simple must have the OutLayer customization (`allowAnyApp` + `gatewayAppId`)
+### B. auth-simple must have the OutLayer customization (`allowAnyApp` + device allowlist)
 
 `30-deploy-kms.sh` deploys **stock** auth-simple. The gateway runbook depends on the OutLayer
 `index.ts` customization applied by `kms/apply-auth-simple.sh` (README Step 4b) for **two** reasons —
-both will silently break the gateway if it's missing:
+both will silently break the gateway if it's missing or incomplete:
 
 1. **`allowAnyApp:true`** — the gateway CVM gets a fresh app-id on every (re)deploy (launch-token
    randomization). With stock auth-simple, that app-id is not in `apps`, so the KMS **denies the
    gateway at boot** and it never gets its app key. `allowAnyApp` lets any app passing TCB + `osImages`
-   boot without a per-app allowlist entry. (This is also why `40-deploy-gateway.sh` skips the L1 KMS
-   allowlist step.)
-2. **The `gatewayAppId` config field** — `40-deploy-gateway.sh deploy` writes
-   `gatewayAppId=<this gateway's app-id>` into `auth-config.json` and reloads the webhook, so
-   gateway-enabled CVMs (the keystore) learn which gateway to trust. **Stock auth-simple's schema has
-   no `gatewayAppId` field and never returns it to a booting CVM** — so even if you set it in the JSON,
-   it is a no-op, and the keystore reboot-loops with `Missing allowed dstack-gateway app id`. The
-   `apply-auth-simple.sh` patch adds `gatewayAppId: z.string().default('')` to the schema AND makes
-   `checkAppBoot` return it. Without the patch, step (6) in the deploy below does nothing useful.
+   + the device allowlist boot without a per-app allowlist entry. (This is also why
+   `40-deploy-gateway.sh` skips the L1 KMS allowlist step.)
+2. **The node device allowlist (`devices`)** — every app boot, the gateway CVM included, is denied
+   unless the booting CVM's `deviceId` (`sha256(PPID)` of THIS host, from the DCAP-verified quote) is
+   listed. An empty or wrong list denies the gateway at boot; see `kms/README.md` "Device allowlist".
+
+`gatewayAppId` is an upstream auth-simple field: `40-deploy-gateway.sh deploy` writes
+`gatewayAppId=<this gateway's app-id>` into `auth-config.json` and reloads the webhook, so
+gateway-enabled CVMs (the keystore) learn which gateway to trust; a keystore booted while it is unset
+reboot-loops with `Missing allowed dstack-gateway app id`.
 
 Verify the patch + config are in place (run on the node):
 
 ```bash
-grep -c gatewayAppId /home/outlayer/meta-dstack/dstack/kms/auth-simple/index.ts   # > 0 means patched
-python3 -c 'import json; d=json.load(open("/home/outlayer/outlayer-kms/auth-config.json")); print("allowAnyApp:", d.get("allowAnyApp"), "| gatewayAppId field present:", "gatewayAppId" in d)'
+grep -c deviceAllowlist /home/outlayer/meta-dstack/dstack/kms/auth-simple/index.ts   # > 0 means patched
+python3 -c 'import json; d=json.load(open("/home/outlayer/outlayer-kms/auth-config.json")); print("allowAnyApp:", d.get("allowAnyApp"), "| devices:", d.get("devices"), "| gatewayAppId:", d.get("gatewayAppId"))'
 ```
 
-If `allowAnyApp` is not `True` or the grep is `0`, run `cd ~/self-hosted-tdx/kms && ./apply-auth-simple.sh`.
+If `allowAnyApp` is not `True`, `devices` is empty, or the grep is `0`, run
+`cd ~/self-hosted-tdx/kms && KMS_DEVICES=0x<sha256(ppid)> ./apply-auth-simple.sh`.
 
 ### C. DNS — Cloudflare gray-cloud / DNS-only (NOT proxied)
 
@@ -407,7 +409,7 @@ guest-agent `:8090`).
 
 1. Pinned `outlayer/dstack-gateway@sha256:072e…` (0.5.11); DNS `*.dstack.outlayer.ai A 173.237.9.76`
    **gray-cloud**; scoped CF token at `/home/outlayer/gateway-cf-token`; host resolver public DNS +
-   `Cache=no-negative`; auth-simple patched (`allowAnyApp` + `gatewayAppId`).
+   `Cache=no-negative`; auth-simple patched (`allowAnyApp` + device allowlist), `gatewayAppId` set.
 2. `./40-deploy-gateway.sh deploy` → gateway CVM up; KMS issued the app key (allowAnyApp); image
    pulled; `gatewayAppId` auto-set in auth-config.
 3. L3 NOT a vmm restart — the keystore uses `--gateway-url` per-VM.
@@ -489,9 +491,9 @@ NAME=dstack-gateway worker-ctl.sh serial  # qemu boot/serial console (boot or at
 - **Gateway-enabled apps (the keystore) reboot-loop with `Missing allowed dstack-gateway app id`.**
   (dstack-util `system_setup.rs:588` — a clean reboot right after `Filesystem options:
   encryption=true`, not a panic.) Cause: the KMS isn't returning the gateway's app-id to the keystore.
-  Two requirements, both covered above: (a) auth-simple must be PATCHED so `gatewayAppId` is a real
-  schema field that `checkAppBoot` returns (Prereq B / `apply-auth-simple.sh`); (b) the gateway's
-  current app-id must be set in `auth-config.json` (`40-deploy-gateway.sh deploy` does this + reloads
+  Two requirements, both covered above: (a) auth-simple must let the keystore boot at all (Prereq B:
+  `allowAnyApp` + this host in `devices`); (b) the gateway's current app-id must be set as
+  `gatewayAppId` in `auth-config.json` (`40-deploy-gateway.sh deploy` does this + reloads
   auth-simple). If you ever redeploy the gateway, redeploy/reboot the keystore so it re-verifies
   against the new app-id.
 - **Do NOT `systemctl restart outlayer-dstack-vmm.service` to "apply" anything.** Every CVM

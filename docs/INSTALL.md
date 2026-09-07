@@ -40,9 +40,11 @@ SGX/PCCS collateral registered (record the node's **FMSPC**). Hardware/BIOS/kern
 `10-build-dstack.sh` then `20-start-vmm.sh` → the outlayer-owned `dstack-vmm` on `127.0.0.1:11000`.
 
 ### 3. KMS-as-CVM + auth-simple patch (README Steps 4 **and 4b**)
-`30-deploy-kms.sh` deploys the per-node KMS. **Then `kms/apply-auth-simple.sh`** (Step 4b) — adds
-`allowAnyApp:true` + the `gatewayAppId` schema field. This is MANDATORY and the #1 cause of a failed
-gateway/keystore later if skipped (`gateway.md` Prereq B explains both reasons).
+`30-deploy-kms.sh` deploys the per-node KMS. **Then `KMS_DEVICES=0x<sha256(ppid)> kms/apply-auth-simple.sh`**
+(Step 4b) — `allowAnyApp:true` plus the node device allowlist (this host's `sha256(PPID)`, see
+`kms/README.md`). MANDATORY and the #1 cause of a failed gateway/keystore later if skipped
+(`gateway.md` Prereq B). Every TDX node runs its own KMS + auth-simple, so run it on each node with that
+node's own id, then restart a non-critical CVM and confirm `isAllowed: true` in the auth log.
 
 ### 4. Gateway — TEE HTTPS ingress → **`docs/gateway.md`**
 Build/pull the image, set `gateway/gateway.env` (per-node values above), then

@@ -24,7 +24,7 @@ endpoint). Have these done first:
 | Step | Gives the keystore |
 |---|---|
 | README 0–3 | TDX host + attestation + the outlayer `dstack-vmm` (`127.0.0.1:11000`) |
-| README 4 + **4b** (`30-deploy-kms.sh` + `kms/apply-auth-simple.sh`) | per-node KMS + **`allowAnyApp` + `gatewayAppId`** (MANDATORY — see `gateway.md` Prereq B) |
+| README 4 + **4b** (`30-deploy-kms.sh` + `KMS_DEVICES=… kms/apply-auth-simple.sh`) | per-node KMS + **`allowAnyApp` + this node's device allowlist** (MANDATORY — see `gateway.md` Prereq B) |
 | `gateway.md` (40-deploy-gateway.sh deploy + bootstrap) | a running gateway with a wildcard cert, and the KMS `gatewayAppId` set to the gateway's app-id |
 
 Verify the gateway is up and the KMS trusts it (run on the node):

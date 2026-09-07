@@ -54,7 +54,10 @@ echo "=== [3/8] auth-config.json (osImages set; kms.mrAggregated filled in step 
 # It is NOT optional: /bootAuth/kms gates Onboard.Bootstrap too, not just KMS HA onboarding — with
 # an empty list the KMS refuses to bootstrap ("boot denied: aggregated MR not allowed"), stays in
 # onboard mode on plain http, and every `vmm-cli deploy --kms-url` then dies on the TLS handshake.
-# App (worker) entries are handled by allowAnyApp (kms/apply-auth-simple.sh).
+# App entries: allowAnyApp + the node device allowlist, both written by kms/apply-auth-simple.sh
+# (README step 4b). This script only seeds the file; on an existing config it changes nothing
+# (setdefault), so the device allowlist is enforced only once step 4b has run.
+# kms.devices is seeded EMPTY (upstream: empty = any device) so the KMS CVM can bootstrap.
 sudo -u "$NODE_USER" mkdir -p "$KMSDIR"
 if [ -s "$KMSDIR/auth-config.json" ]; then
   echo "  keeping existing $KMSDIR/auth-config.json (osImages refreshed)"
@@ -66,7 +69,8 @@ c.setdefault("osImages", [])
 if os_hash not in c["osImages"]:
     c["osImages"].append(os_hash)
 c.setdefault("kms", {}).setdefault("mrAggregated", [])
-c["kms"].setdefault("allowAnyDevice", True)
+c["kms"].setdefault("allowAnyDevice", False)
+c["kms"].setdefault("devices", [])
 c.setdefault("apps", {})
 json.dump(c, open(p, "w"), indent=2)
 PY
@@ -74,7 +78,7 @@ else
   cat > "$KMSDIR/auth-config.json" <<JSON
 {
   "osImages": ["$OS_HASH"],
-  "kms": { "mrAggregated": [], "allowAnyDevice": true },
+  "kms": { "mrAggregated": [], "allowAnyDevice": false, "devices": [] },
   "apps": {}
 }
 JSON

@@ -128,8 +128,11 @@ systemctl is-active outlayer-dstack-vmm && ss -ltnp | grep 11000
 ```bash
 cd /home/outlayer/self-hosted-tdx
 ./30-deploy-kms.sh
-./kms/apply-auth-simple.sh     # MANDATORY: allowAnyApp — otherwise every worker CVM must be
-                               # hand-added to outlayer-kms/auth-config.json before it may boot
+KMS_DEVICES=0x<sha256(ppid)> ./kms/apply-auth-simple.sh
+                               # MANDATORY: allowAnyApp (else every worker CVM must be hand-added to
+                               # outlayer-kms/auth-config.json) + this node's device allowlist (kms/README.md).
+                               # Then restart a non-critical CVM and confirm isAllowed: true in
+                               # journalctl -u outlayer-kms-auth.service before touching the KMS CVM.
 systemctl is-active outlayer-kms-auth
 curl -sk -X POST https://127.0.0.1:11001/prpc/GetMeta?json -d '{}' | head -c 200
 ```
