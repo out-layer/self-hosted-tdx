@@ -42,10 +42,12 @@ id`. Re-run `40-deploy-gateway.sh deploy` (it auto-sets it) — do NOT hand-depl
   resolves the `| keystore |` digest for the chosen `--version` from the GitHub release. On a node
   **without `gh`** (the TDX node), resolve + verify the digest once on a trusted machine and pass it in:
   ```bash
-  gh release view v0.1.35 --repo fastnear/near-outlayer --json body -q .body | grep -iE '\| *keystore *\|'
-  gh attestation verify oci://docker.io/outlayer/near-outlayer-keystore@<digest> -R fastnear/near-outlayer
+  gh release view <version> --repo out-layer/outlayer --json body -q .body | grep -iE '\| *keystore *\|'
+  gh attestation verify oci://docker.io/outlayer/near-outlayer-keystore@<digest> -R out-layer/outlayer
   # then on the node:  WORKER_DIGEST=sha256:<digest> ...
   ```
+  Releases up to `v0.1.58` are attested under the `fastnear` GitHub organization: verify those
+  with `--owner fastnear` instead of `-R out-layer/outlayer`.
   The Mac orchestrator (`scripts/deploy_tdx.sh`, parent repo) does this resolve+verify for you.
 
 ### C. The secrets env file (per network)

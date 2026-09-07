@@ -78,20 +78,20 @@ if [ -n "${WORKER_DIGEST:-}" ]; then
 elif command -v gh >/dev/null 2>&1; then
   # `|| true`: don't let set -e kill us inside the command substitution — the guard below
   # prints a useful message instead of dying silently.
-  DIGEST=$(gh release view "$VERSION" --repo fastnear/near-outlayer --json body -q '.body' 2>/dev/null \
+  DIGEST=$(gh release view "$VERSION" --repo out-layer/outlayer --json body -q '.body' 2>/dev/null \
     | grep -iE '\| *keystore *\|' | grep -oE 'sha256:[a-f0-9]{64}' | head -1) || true
   echo "  keystore digest (GitHub release, Sigstore-attested): ${DIGEST:-<none found>}"
 else
   echo "ERROR: gh is not installed and WORKER_DIGEST is not set." >&2
   echo "  On a machine WITH gh (e.g. your laptop), resolve + verify the digest:" >&2
-  echo "    gh release view $VERSION --repo fastnear/near-outlayer --json body -q .body | grep -iE '\\| *keystore *\\|'" >&2
-  echo "    gh attestation verify oci://docker.io/outlayer/near-outlayer-keystore@<digest> -R fastnear/near-outlayer" >&2
+  echo "    gh release view $VERSION --repo out-layer/outlayer --json body -q .body | grep -iE '\\| *keystore *\\|'" >&2
+  echo "    gh attestation verify oci://docker.io/outlayer/near-outlayer-keystore@<digest> -R out-layer/outlayer" >&2
   echo "  then re-run here with:  WORKER_DIGEST=sha256:<digest> $0 $VERSION" >&2
   exit 1
 fi
 [ -n "$DIGEST" ] || { echo "Could not resolve keystore digest for $VERSION — pass WORKER_DIGEST=sha256:..." >&2; exit 1; }
 echo "  keystore digest: $DIGEST"
-echo "  verify (on a trusted machine): gh attestation verify oci://docker.io/outlayer/near-outlayer-keystore@$DIGEST -R fastnear/near-outlayer"
+echo "  verify (on a trusted machine): gh attestation verify oci://docker.io/outlayer/near-outlayer-keystore@$DIGEST -R out-layer/outlayer   (releases <= v0.1.58: --owner fastnear)"
 # Render the compose with the pinned digest into a TEMP file — never mutate the committed
 # docker-compose.yaml (that would dirty the git tree and block `git pull` on the node).
 RENDERED="$(mktemp "${TMPDIR:-/tmp}/outlayer-keystore-compose.XXXXXX")"
