@@ -60,7 +60,7 @@ fresh_copy() {  # $1 = dir name; upstream tree with a STOCK index.ts and no left
 apply() {  # $1 = dir, rest = env assignments
   local dir="$1"; shift
   env AUTH_SIMPLE_INDEX="$TMP/$dir/index.ts" AUTH_CONFIG="$TMP/$dir/auth-config.json" \
-      AUTH_SERVICE=test.service SYSTEMCTL=true "$@" bash "$SCRIPT"
+      AUTH_SERVICE=test.service SYSTEMCTL=true NODE_DEVICE_ID_CMD=false "$@" bash "$SCRIPT"
 }
 # Reproduce the shape the earlier allowAnyApp-only patch left on the live nodes.
 old_patch() {
@@ -88,10 +88,16 @@ if h="$(pristine_index "$TMP/nogit" "$TMP/nogit.stock")" && ! grep -q "allowAnyA
 rm -rf "$TMP/none"; mkdir -p "$TMP/none"; cp "$TMP/repo/index.ts" "$TMP/none/index.ts"
 if pristine_index "$TMP/none" "$TMP/none.stock" >/dev/null 2>&1; then bad "accepted a tree with no stock index.ts"; else ok "refuses a tree with no stock index.ts"; fi
 
-echo "== 1. refuses without KMS_DEVICES"
+echo "== 1. KMS_DEVICES unset: derived on the node, or refused when that fails"
 fresh_copy a
-if apply a KMS_DEVICES= >/dev/null 2>&1; then bad "ran with empty KMS_DEVICES"; else ok "refused"; fi
+if apply a KMS_DEVICES= >/dev/null 2>&1; then bad "ran with no id and a failing derivation"; else ok "refused when derivation fails"; fi
 [ "$(sum "$STOCK")" = "$(sum "$TMP/a/index.ts")" ] && ok "index.ts untouched" || bad "index.ts modified"
+if apply a KMS_DEVICES= NODE_DEVICE_ID_CMD="echo" >/dev/null 2>&1; then bad "ran with an empty derived id"; else ok "refused when derivation prints nothing"; fi
+out="$(apply a KMS_DEVICES= NODE_DEVICE_ID_CMD="echo $DEV_2" 2>&1)" && grep -q "device id derived on this node: $DEV_2" <<<"$out" \
+  && [ "$(cfg a)" = '{"allowAnyApp": true, "devices": ["'$DEV_2'"], "kmsAny": false, "kmsDev": ["'$DEV_2'"]}' ] \
+  && ok "derived id used for the allowlist" || bad "derived id not used: $out"
+out="$(apply a KMS_DEVICES="$DEV_OK" NODE_DEVICE_ID_CMD="echo $DEV_2" 2>&1)" && [ "$(cfg a)" = '{"allowAnyApp": true, "devices": ["'$DEV_OK'"], "kmsAny": false, "kmsDev": ["'$DEV_OK'"]}' ] \
+  && ok "explicit KMS_DEVICES wins over derivation" || bad "explicit KMS_DEVICES ignored"
 
 # Every refusal below must leave BOTH files untouched and no auth-config.json.next behind: a patched
 # index.ts next to an unpatched config would deny every boot at the next service restart.
@@ -148,6 +154,28 @@ grep -q "deviceAllowlist" "$TMP/b/index.ts" && ok "device check present" || bad 
 code() { grep -v '^[[:space:]]*//' "$1" | cksum | cut -d' ' -f1; }
 [ "$(code "$TMP/a/index.ts")" = "$(code "$TMP/b/index.ts")" ] && ok "same code as patching stock directly (comments aside)" || bad "old-patch path diverges from stock path"
 
+echo "== 5b. hand-applied multi-line early allow (the dal-2 shape)"
+fresh_copy b2
+python3 - "$TMP/b2/index.ts" <<'PY'
+import sys; p=sys.argv[1]; s=open(p).read()
+a1="  gatewayAppId: z.string().default(''),\n"
+s=s.replace(a1,a1+"  // OutLayer customization: when true, ANY app (passing the TCB + osImages checks) is allowed\n  allowAnyApp: z.boolean().default(false),\n",1)
+a2="    const composeHash = normalizeHex(bootInfo.composeHash);\n"
+s=s.replace(a2,a2+"\n    // OutLayer: single-tenant node — allow any app (TCB + osImages already checked above).\n    // Each app still gets its own per-appId key; on-chain registration is the real gate.\n    if (config.allowAnyApp) {\n      return {\n        isAllowed: true,\n        reason: 'allowAnyApp (single-tenant node; register-contract gates worker registration)',\n        gatewayAppId: config.gatewayAppId\n      };\n    }\n",1)
+s=s.replace("  fetch: app.fetch,\n","  hostname: process.env.HOST || \"127.0.0.1\",\n  fetch: app.fetch,\n",1)
+open(p,'w').write(s)
+PY
+apply b2 KMS_DEVICES="$DEV_OK" >/dev/null
+[ "$(grep -c 'if (config.allowAnyApp)' "$TMP/b2/index.ts")" = 1 ] && ok "multi-line allow replaced, not duplicated" || bad "duplicate/missing allowAnyApp allow"
+grep -q "single-tenant node — allow any app" "$TMP/b2/index.ts" && bad "old comment block left behind" || ok "old comment block removed with the allow"
+grep -q "deviceAllowlist" "$TMP/b2/index.ts" && ok "device check present" || bad "device check missing"
+grep -q "hostname: process.env.HOST" "$TMP/b2/index.ts" && ok "unrelated local edits kept" || bad "unrelated local edits lost"
+python3 - "$TMP/a/index.ts" "$TMP/b2/index.ts" <<'PY' && ok "same code as the stock path (comments and the hostname line aside)" || bad "dal shape diverges from stock path"
+import sys,re
+def code(p): return [l for l in open(p).read().splitlines() if not l.strip().startswith("//") and "hostname: process.env.HOST" not in l]
+sys.exit(0 if code(sys.argv[1]) == code(sys.argv[2]) else 1)
+PY
+
 echo "== 6. unknown early-allow shape aborts and leaves index.ts untouched"
 fresh_copy c
 python3 - "$TMP/c/index.ts" <<'PY'
@@ -160,6 +188,41 @@ PY
 cp "$TMP/c/index.ts" "$TMP/c/index.before"
 if apply c KMS_DEVICES="$DEV_OK" >/dev/null 2>&1; then bad "did not abort"; else ok "aborted"; fi
 [ "$(sum "$TMP/c/index.before")" = "$(sum "$TMP/c/index.ts")" ] && ok "index.ts untouched" || bad "index.ts modified"
+
+echo "== 6b. node-device-id.py extracts sha256(PPID) from the PCK certificate inside a quote"
+if python3 -c "import cryptography" 2>/dev/null; then
+  python3 - "$TMP" <<'PY'
+import sys, os, hashlib, datetime
+from cryptography import x509
+from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
+tmp = sys.argv[1]
+ppid = bytes(range(16))
+# SGX extensions sequence: SEQ { SEQ { OID 1.2.840.113741.1.13.1.1, OCTET STRING ppid } }
+inner = bytes.fromhex("060a2a864886f84d010d0101") + b"\x04\x10" + ppid
+seq1 = b"\x30" + bytes([len(inner)]) + inner
+sgx = b"\x30" + bytes([len(seq1)]) + seq1
+key = ec.generate_private_key(ec.SECP256R1())
+name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Intel SGX PCK Certificate (test)")])
+now = datetime.datetime(2026, 1, 1)
+cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+        .serial_number(1).not_valid_before(now).not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(x509.UnrecognizedExtension(x509.ObjectIdentifier("1.2.840.113741.1.13.1"), sgx), critical=False)
+        .sign(key, hashes.SHA256()))
+from cryptography.hazmat.primitives import serialization
+pem = cert.public_bytes(serialization.Encoding.PEM)
+quote = b"\x04\x00\x02\x00\x81\x00\x00\x00" + os.urandom(600) + pem + b"\x00"   # header + junk + chain
+open(os.path.join(tmp, "fake-quote.hex"), "w").write(quote.hex())
+open(os.path.join(tmp, "fake-quote.expected"), "w").write("0x" + hashlib.sha256(ppid).hexdigest())
+PY
+  got="$(python3 "$HERE/node-device-id.py" --quote-hex "$TMP/fake-quote.hex" 2>&1)"
+  [ "$got" = "$(cat "$TMP/fake-quote.expected")" ] && ok "sha256(PPID) from a synthetic PCK certificate" || bad "node-device-id.py: $got"
+  printf '0400020081000000deadbeef' > "$TMP/no-chain.hex"
+  if python3 "$HERE/node-device-id.py" --quote-hex "$TMP/no-chain.hex" >/dev/null 2>&1; then bad "accepted a quote without a certificate chain"; else ok "refuses a quote without a certificate chain"; fi
+else
+  echo "  SKIP node-device-id.py test: python 'cryptography' module not installed here (00-host-setup.sh installs it on nodes)"
+fi
 
 echo "== 7. behaviour of the patched server (bun test)"
 cp "$HERE/apply-auth-simple.test.ts" "$TMP/a/"

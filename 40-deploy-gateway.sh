@@ -131,7 +131,7 @@ AUTH_INDEX="${AUTH_SIMPLE_INDEX:-$DSTACK/kms/auth-simple/index.ts}"
 if [ -f "$AUTH_INDEX" ] && ! { grep -q "allowAnyApp" "$AUTH_INDEX" && grep -q "deviceAllowlist" "$AUTH_INDEX"; } 2>/dev/null; then
   echo "WARN: auth-simple index.ts is NOT fully patched (allowAnyApp + device allowlist): $AUTH_INDEX"
   echo "      The gateway will be DENIED at boot and the keystore will reboot-loop."
-  echo "      Run README step 4b first:  cd $(dirname "$0")/kms && KMS_DEVICES=0x<sha256(ppid)> ./apply-auth-simple.sh"
+  echo "      Run README step 4b first:  cd $(dirname "$0")/kms && ./apply-auth-simple.sh"
 fi
 if [ -f "$AUTH_CONFIG" ] && ! python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if c.get("allowAnyApp") is True and c.get("devices") else 1)' "$AUTH_CONFIG" 2>/dev/null; then
   echo "WARN: $AUTH_CONFIG lacks allowAnyApp=true and/or a non-empty devices allowlist — run kms/apply-auth-simple.sh (README step 4b)."

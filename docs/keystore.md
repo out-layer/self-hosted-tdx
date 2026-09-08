@@ -24,7 +24,7 @@ endpoint). Have these done first:
 | Step | Gives the keystore |
 |---|---|
 | README 0–3 | TDX host + attestation + the outlayer `dstack-vmm` (`127.0.0.1:11000`) |
-| README 4 + **4b** (`30-deploy-kms.sh` + `KMS_DEVICES=… kms/apply-auth-simple.sh`) | per-node KMS + **`allowAnyApp` + this node's device allowlist** (MANDATORY — see `gateway.md` Prereq B) |
+| README 4 + **4b** (`30-deploy-kms.sh` + `kms/apply-auth-simple.sh`) | per-node KMS + **`allowAnyApp` + this node's device allowlist** (MANDATORY — see `gateway.md` Prereq B) |
 | `gateway.md` (40-deploy-gateway.sh deploy + bootstrap) | a running gateway with a wildcard cert, and the KMS `gatewayAppId` set to the gateway's app-id |
 
 Verify the gateway is up and the KMS trusts it (run on the node):
@@ -144,13 +144,17 @@ require additional signers — verify the DAO's vote threshold before counting o
 ## Verify
 
 ```bash
+# The port opens only once the instance is READY (registration + DAO vote + MPC master done):
+# before that every connect is refused, which is what keeps the gateway from routing to it.
 curl -s https://<keystore-app-id>-8081.<gateway-domain>/health
 # -> {"status":"ok","tee_mode":"outlayer_tee"}   (HTTP 200, valid Let's Encrypt TLS)
 ```
 The app-id is `sha256(app-compose.json)[:40]`; the deploy prints the full `KEYSTORE_BASE_URL`. It is
 **stable** across redeploys (the gateway-mode compose is deterministic for a given COMPOSE_NAME).
 
-Wire that URL into callers as `KEYSTORE_BASE_URL` (the worker + coordinator env).
+Wire that URL into callers: `KEYSTORE_BASE_URL` in the worker env, and as one entry of the
+comma-separated `KEYSTORE_BASE_URLS` in the coordinator env (one entry per keystore instance of the
+live version; the coordinator picks per request and fails over between them).
 
 ---
 

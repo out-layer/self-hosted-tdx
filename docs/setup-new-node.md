@@ -79,16 +79,12 @@ Copy this repo to the node (from the Mac; keep the secrets out of git and off th
 need). `worker/.env.<net>-worker-tdx` is the only secret file a worker node needs:
 
 ```bash
-# on the Mac, from deploy/self-hosted-tdx/
-rsync -a --exclude '.git' --exclude '.idea' --exclude 'keystore/.env.*' \
-      --exclude 'worker/.env.mainnet-worker-tdx' \
-      ./ root@23.109.254.164:/root/stage/self-hosted-tdx/
+# on the Mac, from deploy/self-hosted-tdx/ — same command for every later update
+./sync-node.sh 23.109.254.164        # rsync into /home/outlayer/self-hosted-tdx, owner outlayer
 ```
 
 ```bash
-# back on the node
-rsync -a /root/stage/self-hosted-tdx/ /home/outlayer/self-hosted-tdx/
-chown -R outlayer:outlayer /home/outlayer/self-hosted-tdx
+# on the node
 chmod 600 /home/outlayer/self-hosted-tdx/worker/.env.testnet-worker-tdx
 
 # Rust (build.sh host needs cargo)
@@ -128,7 +124,7 @@ systemctl is-active outlayer-dstack-vmm && ss -ltnp | grep 11000
 ```bash
 cd /home/outlayer/self-hosted-tdx
 ./30-deploy-kms.sh
-KMS_DEVICES=0x<sha256(ppid)> ./kms/apply-auth-simple.sh
+./kms/apply-auth-simple.sh
                                # MANDATORY: allowAnyApp (else every worker CVM must be hand-added to
                                # outlayer-kms/auth-config.json) + this node's device allowlist (kms/README.md).
                                # Then restart a non-critical CVM and confirm isAllowed: true in

@@ -160,6 +160,8 @@ echo "[3/3] Deploy keystore CVM (inbound :8081 on a loopback host port)..."
 # dstack-gateway in prod, NOT via these host ports):
 #   1) guest 8090 (dstack guest-agent) -> a free host port: logs/measurements via worker-ctl.sh.
 #   2) guest 8081 (the keystore HTTP server) -> a free host port: node-local /health smoke test.
+#      Connection refused until the keystore is READY (it binds the port only after its DAO vote
+#      and MPC master); readiness is the "Keystore is now ready" log line, not the port.
 # A FIXED port collides as soon as a 2nd CVM is deployed ("Could not set up host forwarding
 # rule" -> qemu crash-loops), so pick FREE host ports. worker-ctl.sh discovers the live agent
 # port afterwards (vmm may reassign on restart); for the keystore port the orchestrator reads
@@ -236,6 +238,7 @@ if [ -n "$GATEWAY_URL" ]; then
   echo "Gateway mode: keystore app-id=$KS_APP_ID"
   echo "  public URL (via dstack-gateway): $KEYSTORE_BASE_URL"
   echo "  KEYSTORE_BASE_URL=$KEYSTORE_BASE_URL"
+  echo "  (worker env: KEYSTORE_BASE_URL; coordinator env: add it to the comma-separated KEYSTORE_BASE_URLS)"
 fi
 
 echo "Done. Keystore boots, gets its KMS app key + a TDX quote, and self-submits its DAO"

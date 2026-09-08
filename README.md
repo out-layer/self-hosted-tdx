@@ -130,8 +130,8 @@ runbook in `docs/gateway.md` relies on both — without it the gateway CVM is de
 keystore reboot-loops with "Missing allowed dstack-gateway app id"):
 
 ```bash
-# KMS_DEVICES = sha256(PPID) of this node (kms/README.md "Device allowlist"); the script refuses an empty list.
-cd ~/self-hosted-tdx/kms && KMS_DEVICES=0x<sha256(ppid)> ./apply-auth-simple.sh
+# The node's device id (sha256 of its PPID) is derived on the node by kms/node-device-id.py; KMS_DEVICES=... overrides.
+cd ~/self-hosted-tdx/kms && ./apply-auth-simple.sh
 # then restart a NON-critical CVM and confirm isAllowed: true in `journalctl -u outlayer-kms-auth.service`
 # before touching the KMS CVM; a denial prints the real deviceId, fix the config and the CVM boots on its next retry.
 ```
@@ -178,10 +178,12 @@ The worker retries → registers → polls the coordinator → executes tasks.
 | File | Purpose |
 |---|---|
 | `00-host-setup.sh` | Host: TDX kernel + deps + attestation stack (idempotent) |
+| `sync-node.sh` | Copy this tree to a node (rsync into `/home/outlayer/self-hosted-tdx`, no git on nodes) |
 | `10-build-dstack.sh` | Build dstack + download guest image (pinned version) |
 | `20-start-vmm.sh` | Install vmm.toml + start dstack-vmm (systemd) |
 | `30-deploy-kms.sh` | auth-simple + KMS-CVM deploy + bootstrap |
-| `kms/apply-auth-simple.sh` | Step 4b: patch auth-simple (`allowAnyApp` + `devices` allowlist + `deviceId` logging) — idempotent, needs `KMS_DEVICES` |
+| `kms/apply-auth-simple.sh` | Step 4b: patch auth-simple (`allowAnyApp` + `devices` allowlist + `deviceId` logging) — idempotent, derives the node id itself |
+| `kms/node-device-id.py` | Print this node's auth-simple deviceId (sha256 of the PPID in a local quote) |
 | `kms/test-apply-auth-simple.sh` | Tests for the above against an upstream auth-simple checkout (needs bun) |
 | `40-deploy-worker.sh` | Resolve verifiable digest + deploy worker CVM (KMS mode) |
 | `40-deploy-keystore.sh` | Deploy keystore CVM (KMS mode; gateway mode via `GATEWAY_URL`) |

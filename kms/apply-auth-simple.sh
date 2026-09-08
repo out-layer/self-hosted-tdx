@@ -12,12 +12,15 @@
 # unpatched config. Idempotent + re-runnable (skips anything already applied). Run on the node
 # (uses sudo for the service restart). See kms/README.md for the fields and the security rationale.
 #
-#   KMS_DEVICES=0x<sha256(ppid)>[,0x<sha256(ppid)>...] ./apply-auth-simple.sh
+#   ./apply-auth-simple.sh                                    # this node's id, derived on the node
+#   KMS_DEVICES=0x<sha256(ppid)>[,0x<sha256(ppid)>...] ./apply-auth-simple.sh   # explicit list
 #
-# KMS_DEVICES is REQUIRED and must be non-empty: the device allowlist is what keeps the KMS from
-# releasing app keys (and therefore our `key-provider` RTMR3 event) to our image booted on foreign
-# hardware, even if the KMS port is ever exposed. deviceId = sha256(PPID) taken by the KMS from the
-# DCAP-verified quote; see kms/README.md "Device allowlist".
+# The device allowlist is what keeps the KMS from releasing app keys (and therefore our
+# `key-provider` RTMR3 event) to our image booted on foreign hardware, even if the KMS port is ever
+# exposed. deviceId = sha256(PPID), which the KMS takes from the DCAP-verified quote of a booting CVM.
+# With KMS_DEVICES unset, node-device-id.py reads the same PPID out of the PCK certificate inside a
+# quote from the KMS CVM on this host (guest agent :11005) — no database, no log, nothing to remember.
+# It refuses to proceed if that fails or yields nothing: an empty allowlist would be deny-all.
 #
 # There is ONE mode and it is strict. A wrong id in `devices` denies the next CVM boot; a wrong id in
 # `kms.devices` fails every KMS key request at once (the KMS re-asks auth-simple per request). Both
@@ -29,16 +32,23 @@ INDEX="${AUTH_SIMPLE_INDEX:-/home/outlayer/meta-dstack/dstack/kms/auth-simple/in
 CONFIG="${AUTH_CONFIG:-/home/outlayer/outlayer-kms/auth-config.json}"
 SERVICE="${AUTH_SERVICE:-outlayer-kms-auth.service}"
 SYSTEMCTL="${SYSTEMCTL:-sudo systemctl}"     # tests override with a no-op
+HERE="$(cd "$(dirname "$0")" && pwd)"
+NODE_DEVICE_ID_CMD="${NODE_DEVICE_ID_CMD:-python3 $HERE/node-device-id.py}"   # tests override
 KMS_DEVICES="${KMS_DEVICES:-}"
 NEXT="$CONFIG.next"
 
 [ -f "$INDEX" ]  || { echo "auth-simple index.ts not found: $INDEX (set AUTH_SIMPLE_INDEX)" >&2; exit 1; }
 [ -f "$CONFIG" ] || { echo "auth-config.json not found: $CONFIG (set AUTH_CONFIG)" >&2; exit 1; }
-[ -n "$KMS_DEVICES" ] || {
-  echo "KMS_DEVICES is empty. Refusing: an empty device allowlist would let any TDX machine that" >&2
-  echo "reaches this KMS boot our apps with our key-provider. Pass KMS_DEVICES=0x<sha256(ppid)>,..." >&2
-  exit 1
-}
+if [ -z "$KMS_DEVICES" ]; then
+  KMS_DEVICES="$($NODE_DEVICE_ID_CMD 2>/tmp/node-device-id.err || true)"
+  if [ -z "$KMS_DEVICES" ]; then
+    echo "Could not derive this node's device id ($NODE_DEVICE_ID_CMD):" >&2; cat /tmp/node-device-id.err >&2
+    echo "Refusing: an empty device allowlist would deny every boot. Pass KMS_DEVICES=0x<sha256(ppid)> explicitly." >&2
+    rm -f /tmp/node-device-id.err; exit 1
+  fi
+  rm -f /tmp/node-device-id.err
+  echo "device id derived on this node: $KMS_DEVICES"
+fi
 
 # --- 0) validate inputs and build the next config (written to $NEXT, installed in step 2) --------
 rm -f "$NEXT"
@@ -128,9 +138,12 @@ if "// OutLayer top-level device allowlist" not in s:
 # checkAppBoot: the device check goes where the old plain early allow was (or right after the
 # composeHash line on a stock file). An early allow in an unknown shape stops the script: a second,
 # unguarded allow left below the device check would silently bypass it.
+# Both shapes the earlier allowAnyApp-only patch left behind: the one-line return written by the
+# old script, and the hand-applied multi-line one (with its own comment lines right above the if).
 old_allow = re.compile(
+    r"(?:\n    //[^\n]*)*"
     r"\n    if \(config\.allowAnyApp\) \{\n"
-    r"      return \{ isAllowed: true, reason: '[^']*', gatewayAppId: config\.gatewayAppId \};\n"
+    r"      return \{\s*isAllowed: true,\s*reason: '[^']*',\s*gatewayAppId: config\.gatewayAppId\s*\};\n"
     r"    \}\n")
 new_allow = (
     "\n    // OutLayer deviceAllowlist: hardware binding first, app identity second.\n"

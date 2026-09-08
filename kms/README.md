@@ -87,22 +87,56 @@ apply, restart a **non-critical** CVM, confirm `isAllowed: true` on both the `KM
 or "warn-only" switch: a bypass flag in the config is a downgrade path and a phase that is easy to
 leave on forever, and it buys nothing the log line does not already give.
 
-Computing the expected id from the PPID the coordinator stores for the node (`tee_nodes.ppid`):
+Getting a node's id is done **on the node** and needs nothing external:
 
 ```bash
-python3 -c 'import hashlib,sys; print("0x"+hashlib.sha256(bytes.fromhex(sys.argv[1])).hexdigest())' <ppid-hex>
+python3 ~/self-hosted-tdx/kms/node-device-id.py            # -> 0x<64 hex>
+python3 ~/self-hosted-tdx/kms/node-device-id.py --show-ppid # also prints the PPID (= coordinator tee_nodes.ppid)
 ```
 
-Values computed this way for today's nodes (confirm with the boot above):
+It reads the PPID out of the PCK certificate embedded in a quote from the KMS CVM (guest agent
+`:11005`; `--port` for another CVM, `--quote-hex` for a saved quote) and hashes it. `apply-auth-simple.sh`
+runs it itself when `KMS_DEVICES` is unset, so the normal invocation is just `./apply-auth-simple.sh`.
+Cross-checks that all agree, in case of doubt: the value in a patched auth-simple's
+`journalctl -u outlayer-kms-auth.service | grep deviceId` (what the KMS derived from a DCAP-verified
+quote), and `sha256(tee_nodes.ppid)` from the coordinator database.
 
-| node | expected deviceId |
+Node ids as of 2026-09-07 (derived on each node and confirmed by the KMS's own boot-auth log):
+
+| node | deviceId |
 |------|----------|
 | node-tdx-dal-2 | `0xc84189f534d6d90747e068fe8090eafd870f5969176b42f9c43be3bb7e8162ce` |
 | node-tdx-ams-1 | `0x4a252cf80d209d96bb06ce96e17342ea2234f721b4a158707718b18732d6e4a1` |
 
 Every TDX node runs its own KMS + auth-simple (same dstack version everywhere) and only its own
-CVMs reach it, so run step 4b on each node; each node's list needs just its own id, and listing all
-nodes keeps the configs identical, which is harmless.
+CVMs reach it, so run step 4b on each node; each node's list needs just its own id.
+
+## Operations checklist (the part to re-read in a year)
+
+Current state of a node, all read-only:
+
+```bash
+grep -c deviceAllowlist /home/outlayer/meta-dstack/dstack/kms/auth-simple/index.ts   # 1 = patched
+python3 -c 'import json; d=json.load(open("/home/outlayer/outlayer-kms/auth-config.json")); print("allowAnyApp:", d.get("allowAnyApp"), "| devices:", d.get("devices"), "| kms.devices:", d["kms"].get("devices"))'
+python3 ~/self-hosted-tdx/kms/node-device-id.py                     # must appear in both lists above
+journalctl -u outlayer-kms-auth.service | grep -E 'deviceId|isAllowed' | tail   # what recent boots looked like
+```
+
+When to (re)run `./apply-auth-simple.sh` on a node — it is idempotent, so running it when in doubt
+costs nothing:
+
+- **New node**: after `30-deploy-kms.sh` (README step 4b). No id to look up; the script derives it.
+- **CPU or mainboard replaced**: the PPID changes with the silicon, so the old id stops matching and
+  every CVM boot is denied with `device not in OutLayer node allowlist`. Re-run; it writes the new id.
+  (A plain reboot, a disk swap or a NIC swap do not change the PPID.)
+- **dstack upgrade** (new `meta-dstack` checkout): the stock `index.ts` is unpatched again. Re-run;
+  if the anchors moved with the new version the script stops instead of patching blindly — then
+  `test-apply-auth-simple.sh` against the new tree is the first thing to run.
+- **Something else edited `auth-config.json`** (`40-deploy-gateway.sh` writes `gatewayAppId`; that
+  is fine and preserved). Re-run only if `devices` went missing.
+
+Always the same after any run: restart a non-critical CVM and confirm `isAllowed: true` for it in the
+auth log. Tests for all of this: `test-apply-auth-simple.sh` (see below).
 
 ## `allowAnyApp` (avoid per-worker re-allowlisting)
 
@@ -116,10 +150,10 @@ redeploy workers with new names/versions without editing this allowlist.
 Both customizations are a small `index.ts` patch (the live auth-simple lives in the `meta-dstack`
 checkout, outside this repo). **Apply them from git — do NOT hand-edit** — with the idempotent,
 re-runnable script `apply-auth-simple.sh` (run on the node; uses sudo only for the restart).
-`KMS_DEVICES` is required; the script refuses an empty list:
+`KMS_DEVICES` is optional (derived on the node when unset); the script refuses an empty list:
 
 ```bash
-cd ~/self-hosted-tdx/kms && KMS_DEVICES=0x<sha256(ppid)>[,...] ./apply-auth-simple.sh
+cd ~/self-hosted-tdx/kms && ./apply-auth-simple.sh          # id derived on the node; KMS_DEVICES=... to override
 # -> patches index.ts (schema: allowAnyApp + devices; checkAppBoot: device check, then the
 #    allowAnyApp early allow; deviceId in both request log lines; backup at
 #    index.ts.bak.pre-deviceAllowlist), writes allowAnyApp, devices, kms.allowAnyDevice=false,

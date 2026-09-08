@@ -22,3 +22,4 @@ keystore/keystore.env
 gateway/gateway.env
 # WIP planning docs — local-only, not tracked
 docs/*-plan.md
+kms/__pycache__

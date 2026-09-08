@@ -48,7 +48,7 @@ assumes ALL of these are done:
 | Steps 0–2 | TDX host + attestation stack (QGS/PCCS), FMSPC recorded |
 | Step 3 (`20-start-vmm.sh`) | the outlayer-owned `dstack-vmm` on `127.0.0.1:11000` |
 | Step 4 (`30-deploy-kms.sh`) | the per-node KMS-as-CVM + auth-simple webhook |
-| **Step 4b (`KMS_DEVICES=… kms/apply-auth-simple.sh`)** | **`allowAnyApp:true` + this node's device allowlist — MANDATORY (see B)** |
+| **Step 4b (`kms/apply-auth-simple.sh`)** | **`allowAnyApp:true` + this node's device allowlist — MANDATORY (see B)** |
 
 See `../README.md`. **Do NOT skip Step 4b** — it is the single most common reason a fresh-server
 gateway fails. Details below.
@@ -81,7 +81,7 @@ python3 -c 'import json; d=json.load(open("/home/outlayer/outlayer-kms/auth-conf
 ```
 
 If `allowAnyApp` is not `True`, `devices` is empty, or the grep is `0`, run
-`cd ~/self-hosted-tdx/kms && KMS_DEVICES=0x<sha256(ppid)> ./apply-auth-simple.sh`.
+`cd ~/self-hosted-tdx/kms && ./apply-auth-simple.sh` (the node id is derived on the node).
 
 ### C. DNS — Cloudflare gray-cloud / DNS-only (NOT proxied)
 
