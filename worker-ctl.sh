@@ -13,6 +13,9 @@
 #   ./worker-ctl.sh restart                # stop -f + start (re-runs registration)
 #   ./worker-ctl.sh remove <cvm-name>      # stop + delete the CVM (record + disk) — destructive
 #   ./worker-ctl.sh port                   # print the current agent host port
+#   ./worker-ctl.sh keystore-keys testnet  # `export KEEP_<SITE>="<key> <key>"` (KEEP_DAL / KEEP_AMS) = the
+#                                          # registration keys of every running <net>-keystore-* CVM here;
+#                                          # paste it on the Mac before scripts/revoke_old_keystore_keys.sh
 #   ./worker-ctl.sh logs <cvm-name>        # target a CVM by name (positional), e.g.:
 #   ./worker-ctl.sh logs outlayer-worker-testnet-0.1.35-1
 #   ./worker-ctl.sh logs kms               # KMS CVM (auto-uses container dstack-kms-1)
@@ -71,7 +74,9 @@ need_uuid() {
 
 cmd="${1:-status}"; shift || true
 # optional positional CVM name after the subcommand: `worker-ctl.sh logs <name>`
-if [ "${1:-}" ] && [[ "${1:-}" != -* ]]; then NAME="$1"; shift; fi
+# (for keystore-keys the positional is the network, kept apart from NAME)
+NAME_ARG=""
+if [ "${1:-}" ] && [[ "${1:-}" != -* ]]; then NAME_ARG="$1"; NAME="$1"; shift; fi
 # pick the app-log container from the CVM name (compose project 'dstack'): kms -> dstack-kms-1
 [ -n "$CONTAINER" ] || case "$NAME" in
   *kms*)      CONTAINER=dstack-kms-1 ;;
@@ -82,13 +87,45 @@ esac
 # Resolve the target uuid up front for every subcommand except status — and propagate a
 # resolution failure (need_uuid's `exit` inside $() would otherwise be swallowed, leaving an
 # empty uuid that agent_port matches to the first qemu). `|| exit 1` stops cleanly on error.
-case "$cmd" in status|ls|'') : ;; *) u=$(need_uuid) || exit 1 ;; esac
+case "$cmd" in status|ls|keystore-keys|'') : ;; *) u=$(need_uuid) || exit 1 ;; esac
+
+# The DAO registration key of every RUNNING keystore CVM on this node, as one
+# `export KEEP_<SITE>="<key> <key>"` line for scripts/revoke_old_keystore_keys.sh, which requires
+# one such variable per node (KEEP_DAL and KEEP_AMS) and retires every key not in them. SITE is
+# the site label of the hostname (node-tdx-dal-2 -> DAL). Only the CVMs of the given network
+# (`<net>-keystore-*`) count: each network has its own DAO, and a key of the other network would
+# make the script refuse the run. The key is the last "Using keystore public key" line of the
+# instance's log: a CVM restarted by the deploy orchestrator logs one key per boot, and only the
+# last one is the key the instance registered and serves with.
+keystore_keys() {
+  local net="$1" rows name status uuid p key keys="" notes="" var
+  case "$net" in testnet|mainnet) : ;; *) echo "usage: $0 keystore-keys <testnet|mainnet>" >&2; return 1 ;; esac
+  var="KEEP_$(hostname -s | sed -E 's/^node-tdx-([a-z]+)-[0-9]+$/\1/' | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9\n' '_')"
+  rows=$(vmm lsvm 2>/dev/null | sed 's/│/|/g' | awk -F'|' -v pfx="$net-keystore-" '
+    { uuid=$2; name=$4; status=$5; gsub(/[[:space:]]/,"",uuid); gsub(/[[:space:]]/,"",name); gsub(/[[:space:]]/,"",status);
+      if (index(name, pfx) == 1 && uuid ~ /^[0-9a-f-]{36}$/) print uuid "|" name "|" status }')
+  [ -n "$rows" ] || { echo "export $var=\"\""; echo "# no $net keystore CVM on this node"; return 0; }
+  while IFS='|' read -r uuid name status; do
+    if [ "$status" != running ]; then notes+="# $name: $status — not live, no key"$'\n'; continue; fi
+    p=$(agent_port "$uuid")
+    [ -n "${p:-}" ] || { notes+="# $name: no agent port (VM not running?)"$'\n'; continue; }
+    # `|| true`: under set -e / pipefail a log without the line (grep exit 1) must not end the loop.
+    key=$(curl -s "http://127.0.0.1:$p/logs/dstack-keystore-1?text=true&bare=true&tail=20000" \
+      | grep -oE 'Using keystore public key: [a-z0-9-]+:[A-Za-z0-9]+' | tail -1 | sed 's/.*: //' || true)
+    if [ -n "$key" ]; then notes+="# $name: $key"$'\n'; keys="${keys:+$keys }$key"; else notes+="# $name: no 'Using keystore public key' line in its log (older keystore?) — take its key from the DAO proposal"$'\n'; fi
+  done <<< "$rows"
+  # The export line first, then the per-CVM notes as shell comments: the whole output can be
+  # pasted (or eval'd) as-is.
+  echo "export $var=\"$keys\""
+  printf '%s' "$notes"
+}
 
 case "$cmd" in
   status|ls)  vmm lsvm ;;
   info)       vmm info "$u" ;;
   uuid)       echo "$u" ;;
   port)       p=$(agent_port "$u"); echo "${p:-<no live qemu / not started>}" ;;
+  keystore-keys) keystore_keys "${NAME_ARG:-}" ;;
   logs)       p=$(agent_port "$u"); [ -n "${p:-}" ] || { echo "no agent port (VM not running?)" >&2; exit 1; }
               curl -s  "http://127.0.0.1:$p/logs/$CONTAINER?text=true&bare=true&tail=$TAIL" ;;
   follow|f)   p=$(agent_port "$u"); [ -n "${p:-}" ] || { echo "no agent port (VM not running?)" >&2; exit 1; }
@@ -98,5 +135,5 @@ case "$cmd" in
   start)      vmm start "$u" ;;
   restart)    vmm stop -f "$u"; vmm start "$u"; echo "restarted $NAME ($u) — re-run '$0 follow' to watch (port changed)" ;;
   remove|rm)  vmm stop -f "$u" >/dev/null 2>&1 || true; vmm remove "$u" && echo "REMOVED $NAME ($u) — CVM + disk deleted (gone from lsvm; not recoverable)" ;;
-  *) echo "usage: $0 <status|info|uuid|port|logs|follow|serial|stop|start|restart|remove> [cvm-name]" >&2; exit 1 ;;
+  *) echo "usage: $0 <status|info|uuid|port|logs|follow|serial|stop|start|restart|remove> [cvm-name] | keystore-keys <testnet|mainnet>" >&2; exit 1 ;;
 esac

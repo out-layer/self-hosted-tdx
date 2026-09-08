@@ -102,7 +102,7 @@ scripts/deploy_tdx.sh keystore testnet <vm-name> \
 ```
 It resolves+verifies the digest (gh), runs the node-side deploy, then drives governance ([3–6/6]:
 read measurements → owner-approve on the DAO → create proposal + vote → wait for READY) and prints
-`KEYSTORE_BASE_URL=…`. **`--gateway-url` is REQUIRED for a public endpoint** — omit it and you get a
+the keystore URL (`KEYSTORE_URL=…`). **`--gateway-url` is REQUIRED for a public endpoint** — omit it and you get a
 PLAIN, loopback-only keystore (the gateway URL 404s); the orchestrator now WARNS when it's missing.
 
 ### Path B — directly on the node (manual governance, below)
@@ -118,7 +118,7 @@ WORKER_DIGEST=sha256:<keystore-digest> \
 `40-deploy-keystore.sh` handles the four gateway-mode requirements automatically (see Gotchas):
 `--gateway` + dropping `--no-instance-id`, the `port_policy`/`public_tcbinfo` jq-injection, `--gateway-url`,
 `--disk 20G`, `ports: 8081:8081` (in the compose), and the temporary `/etc/hosts` KMS dance +
-clean-DNS reboot. It prints `KEYSTORE_BASE_URL=…` at the end.
+clean-DNS reboot. It prints the keystore URL (`KEYSTORE_URL=…`) at the end.
 
 ---
 
@@ -149,12 +149,32 @@ require additional signers — verify the DAO's vote threshold before counting o
 curl -s https://<keystore-app-id>-8081.<gateway-domain>/health
 # -> {"status":"ok","tee_mode":"outlayer_tee"}   (HTTP 200, valid Let's Encrypt TLS)
 ```
-The app-id is `sha256(app-compose.json)[:40]`; the deploy prints the full `KEYSTORE_BASE_URL`. It is
+The app-id is `sha256(app-compose.json)[:40]`; the deploy prints the full URL (`KEYSTORE_URL=…`). It is
 **stable** across redeploys (the gateway-mode compose is deterministic for a given COMPOSE_NAME).
 
-Wire that URL into callers: `KEYSTORE_BASE_URL` in the worker env, and as one entry of the
-comma-separated `KEYSTORE_BASE_URLS` in the coordinator env (one entry per keystore instance of the
-live version; the coordinator picks per request and fails over between them).
+Wire that URL into callers as one entry of the comma-separated `KEYSTORE_BASE_URLS`, the same
+variable in the worker env and in the coordinator env, one entry per keystore instance of the live
+version. The coordinator spreads requests across the instances and fails over between them; a worker
+sticks to the first reachable instance (its TEE session lives there) and moves to the next only when
+that one becomes unreachable. One instance per node is the layout these URLs assume: two instances
+of the same version behind ONE gateway share the app-id URL and the gateway balances between them
+per TCP connection, which splits a worker's challenge/register handshake across instances. For that
+layout list `https://<instance-id>-8081.<gateway-domain>` per instance instead (`instance_id` in the
+CVM's `shared/.instance_info`).
+
+Retiring the previous version afterwards, once the coordinator serves through the new instances only,
+the old workers are gone and the old keystore CVMs are stopped:
+```bash
+outlayer keystore-keys testnet   # on dal -> `export KEEP_DAL="<key> <key>"`, on ams -> `export KEEP_AMS="…"` (running keystore CVMs)
+# on the Mac: paste BOTH export lines (the script refuses to run with one of them unset), then
+scripts/revoke_old_keystore_keys.sh testnet          # report only: what is kept, what is retired
+scripts/revoke_old_keystore_keys.sh testnet --send   # signs as zavodil.testnet after a prompt
+scripts/revoke_old_keystore_keys.sh mainnet          # prints the near commands for the machine with zavodil.near
+```
+The nodes are the source of truth for "live": measurements cannot be, because a sibling instance of
+the current version and an old version on the same dstack image differ only in RTMR3, and the script
+refuses to guess between them. A keystore CVM whose log has no `Using keystore public key` line
+(older release) is reported by name; take its key from its DAO registration proposal instead.
 
 ---
 

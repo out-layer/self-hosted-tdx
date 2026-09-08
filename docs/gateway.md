@@ -11,7 +11,7 @@ https://<keystore-app-id>-8081.dstack.outlayer.ai
 ```
 
 This dstack version (0.5.11) has **no clean-custom-hostname** with gateway TLS termination — only
-`<app-id>-<port>.<gateway-domain>` (a CNAME breaks SNI-based termination). `KEYSTORE_BASE_URL`
+`<app-id>-<port>.<gateway-domain>` (a CNAME breaks SNI-based termination). `KEYSTORE_BASE_URLS`
 (worker + coordinator) points at the app-id URL; it hides the ugly host.
 
 **This document is a complete standalone runbook.** Following it on a FRESH server (after the base
@@ -461,7 +461,7 @@ NAME=dstack-gateway worker-ctl.sh serial  # qemu boot/serial console (boot or at
 - The guest-agent host port is reassigned on each start; `worker-ctl.sh` auto-discovers it.
 - **Switch keystores:** the canonical URL is `https://<keystore-app-id>-8081.dstack.outlayer.ai`. Run
   several keystores; flip which app-id you publish (or, with the same app-id, the gateway load-balances
-  by WG handshake). Keep `KEYSTORE_BASE_URL` stable for workers/coordinator.
+  by WG handshake). Keep `KEYSTORE_BASE_URLS` stable for workers/coordinator.
 - **Cert renewal** is automatic in the gateway CVM (distributed certbot). The CF token must stay valid
   — to replace one, see §E2 (re-running `bootstrap` will NOT do it).
 

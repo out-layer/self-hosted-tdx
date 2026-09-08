@@ -194,7 +194,7 @@ The worker retries → registers → polls the coordinator → executes tasks.
 | `gateway/gateway.env.template` | Gateway deploy-time env (domain, public IP, image digest, mitigations) |
 | `worker/docker-compose.yaml` | Worker CVM compose (image pinned by digest; mounts dstack.sock) |
 | `worker/{testnet,mainnet}-worker.env.template` | Worker env per network (non-secret defaults + secret placeholders) |
-| `worker-ctl.sh` | Day-2 ops for any CVM by name (start/stop/restart/logs) |
+| `worker-ctl.sh` | Day-2 ops for any CVM by name (start/stop/restart/logs); `keystore-keys <net>` prints the `export KEEP_DAL=…` / `KEEP_AMS=…` line `scripts/revoke_old_keystore_keys.sh` keeps |
 | `docs/bios.md` | Dell racadm BIOS commands |
 | `docs/gateway.md` | Gateway ingress runbook (TEE-terminated HTTPS for the keystore) |
 | `docs/cvm-operations.md` | CVM day-2 ops reference |

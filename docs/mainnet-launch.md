@@ -77,7 +77,7 @@ old `quote_collateral` → `collaterals[0]`).
       - `INIT_ACCOUNT_ID=init-worker.outlayer.near` + `INIT_ACCOUNT_PRIVATE_KEY` (full-access key;
         the contract requires the register caller == `init_worker_account` — confirm via
         `get_init_worker_account` on `worker.outlayer.near`)
-      - mainnet `KEYSTORE_BASE_URL` / `KEYSTORE_AUTH_TOKEN` / `API_AUTH_TOKEN` (secrets)
+      - mainnet `KEYSTORE_BASE_URLS` / `KEYSTORE_AUTH_TOKEN` / `API_AUTH_TOKEN` (secrets)
 - [ ] Deploy (same v0.1.35 prod image as Phala; use a distinct `APP_NAME`, e.g. `outlayer-worker-mainnet`,
       so it doesn't collide with the testnet CVM):
       ```bash

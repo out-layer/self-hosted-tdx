@@ -99,7 +99,11 @@ chown outlayer:outlayer /home/outlayer/.profile
 ```
 
 The worker env is node-independent (no IPs/hostnames in it) — the same file works on every node of
-the fleet, including `KEYSTORE_BASE_URL` pointing at the keystore that runs on another node.
+the fleet, including `KEYSTORE_BASE_URLS` listing keystores that run on other nodes (put this node's
+own instance first). Keep the SET and ORDER of keys identical on every node: `vmm-cli compose` writes
+the env key names (`allowed_envs`, values excluded) into the measured app-compose, so a file with an
+extra, missing or reordered key is a different measurement for the same release — it still deploys
+(the orchestrator approves it as a second measurement), but per-version attribution then splits.
 
 ## 2. Build dstack + fetch the guest image (~20–60 min)
 
@@ -397,7 +401,7 @@ OutLayer vmm on `127.0.0.1:11000` — both already true after the steps above.
 
 - `40-deploy-gateway.sh` — no public ingress
 - `40-deploy-keystore.sh` / DAO governance — the fleet's keystore lives on another node and is
-  reached over its public HTTPS endpoint (`KEYSTORE_BASE_URL` in the worker env)
+  reached over its public HTTPS endpoint (`KEYSTORE_BASE_URLS` in the worker env)
 - mainnet secrets, unless you also deploy a mainnet worker here (then copy
   `worker/.env.mainnet-worker-tdx` too and re-run step 5 with `mainnet`)
 

@@ -59,13 +59,13 @@ the Mac orchestrator:
 scripts/deploy_tdx.sh keystore <net> <vm-name> --version <v> \
   --node root@<ip> --gateway-url https://gateway.<SRV_DOMAIN>:9202
 ```
-The orchestrator drives governance (approve measurements + DAO vote) and prints `KEYSTORE_BASE_URL=…`.
+The orchestrator drives governance (approve measurements + DAO vote) and prints the keystore URL (`KEYSTORE_URL=…`).
 Run it once per network (distinct `COMPOSE_NAME` → distinct app-id/URL, same gateway). On **mainnet**
 the DAO must already have the multi-collateral upgrade + this node's collateral — see `mainnet-launch.md`.
 
 ### 6. Worker(s) — outbound-only execution CVMs (README Step 5)
 `40-deploy-worker.sh <version>` per worker. Workers poll the coordinator outbound; they need no
-gateway/inbound. Wire each worker's `KEYSTORE_BASE_URL` to the keystore URL from step 5.
+gateway/inbound. Wire each worker's `KEYSTORE_BASE_URLS` to the keystore URL from step 5.
 
 ### 7. On-chain: approve measurements + register (README Step 6)
 First boot stalls on "measurements not approved" (expected). As the register-contract / DAO **owner**,

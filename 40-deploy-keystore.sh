@@ -234,11 +234,10 @@ if [ -n "$GATEWAY_URL" ]; then
   # https://gateway.dstack.outlayer.ai:9202 -> dstack.outlayer.ai.
   KS_APP_ID="$(sha256sum "$HERE/keystore/app-compose.json" | cut -c1-40)"
   GW_DOMAIN="$(printf '%s' "$GATEWAY_URL" | sed -E 's#^https?://##; s#:[0-9]+$##; s#/.*$##; s#^gateway\.##')"
-  KEYSTORE_BASE_URL="https://${KS_APP_ID}-8081.${GW_DOMAIN}"
+  KEYSTORE_URL="https://${KS_APP_ID}-8081.${GW_DOMAIN}"
   echo "Gateway mode: keystore app-id=$KS_APP_ID"
-  echo "  public URL (via dstack-gateway): $KEYSTORE_BASE_URL"
-  echo "  KEYSTORE_BASE_URL=$KEYSTORE_BASE_URL"
-  echo "  (worker env: KEYSTORE_BASE_URL; coordinator env: add it to the comma-separated KEYSTORE_BASE_URLS)"
+  echo "  KEYSTORE_URL=$KEYSTORE_URL"
+  echo "  Add it to the comma-separated KEYSTORE_BASE_URLS in the worker env and in the coordinator env."
 fi
 
 echo "Done. Keystore boots, gets its KMS app key + a TDX quote, and self-submits its DAO"
