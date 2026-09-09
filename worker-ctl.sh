@@ -98,7 +98,7 @@ case "$cmd" in status|ls|keystore-keys|'') : ;; *) u=$(need_uuid) || exit 1 ;; e
 # instance's log: a CVM restarted by the deploy orchestrator logs one key per boot, and only the
 # last one is the key the instance registered and serves with.
 keystore_keys() {
-  local net="$1" rows name status uuid p key keys="" notes="" var
+  local net="$1" rows name status uuid p key keys="" notes="" var unreadable=0
   case "$net" in testnet|mainnet) : ;; *) echo "usage: $0 keystore-keys <testnet|mainnet>" >&2; return 1 ;; esac
   var="KEEP_$(hostname -s | sed -E 's/^node-tdx-([a-z]+)-[0-9]+$/\1/' | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9\n' '_')"
   rows=$(vmm lsvm 2>/dev/null | sed 's/│/|/g' | awk -F'|' -v pfx="$net-keystore-" '
@@ -108,12 +108,21 @@ keystore_keys() {
   while IFS='|' read -r uuid name status; do
     if [ "$status" != running ]; then notes+="# $name: $status — not live, no key"$'\n'; continue; fi
     p=$(agent_port "$uuid")
-    [ -n "${p:-}" ] || { notes+="# $name: no agent port (VM not running?)"$'\n'; continue; }
+    [ -n "${p:-}" ] || { notes+="# $name: RUNNING but no agent port — its key could not be read"$'\n'; unreadable=1; continue; }
     # `|| true`: under set -e / pipefail a log without the line (grep exit 1) must not end the loop.
     key=$(curl -s "http://127.0.0.1:$p/logs/dstack-keystore-1?text=true&bare=true&tail=20000" \
       | grep -oE 'Using keystore public key: [a-z0-9-]+:[A-Za-z0-9]+' | tail -1 | sed 's/.*: //' || true)
-    if [ -n "$key" ]; then notes+="# $name: $key"$'\n'; keys="${keys:+$keys }$key"; else notes+="# $name: no 'Using keystore public key' line in its log (older keystore?) — take its key from the DAO proposal"$'\n'; fi
+    if [ -n "$key" ]; then notes+="# $name: $key"$'\n'; keys="${keys:+$keys }$key"; else notes+="# $name: RUNNING but no 'Using keystore public key' line in its log (older keystore, or the line scrolled out) — its key could not be read"$'\n'; unreadable=1; fi
   done <<< "$rows"
+  # A running keystore whose key could not be read gets NO export line: the revoke script keeps
+  # exactly the keys in KEEP_*, so an export line missing a live key is a line that revokes it.
+  # Fail closed — the operator sees which CVM, and takes its key from the DAO proposal or from
+  # `worker-ctl.sh follow` before running the revoke.
+  if [ "$unreadable" = 1 ]; then
+    printf '%s' "$notes" >&2
+    echo "# refusing to print export $var: a running $net keystore has no readable key (see above)" >&2
+    return 1
+  fi
   # The export line first, then the per-CVM notes as shell comments: the whole output can be
   # pasted (or eval'd) as-is.
   echo "export $var=\"$keys\""

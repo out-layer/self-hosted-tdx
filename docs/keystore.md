@@ -173,8 +173,10 @@ scripts/revoke_old_keystore_keys.sh mainnet          # prints the near commands 
 ```
 The nodes are the source of truth for "live": measurements cannot be, because a sibling instance of
 the current version and an old version on the same dstack image differ only in RTMR3, and the script
-refuses to guess between them. A keystore CVM whose log has no `Using keystore public key` line
-(older release) is reported by name; take its key from its DAO registration proposal instead.
+refuses to guess between them. `keystore-keys` prints no export line while a RUNNING keystore CVM
+of that network has no readable `Using keystore public key` line (older release, or the line has
+scrolled out of the log): a line missing a live key is a line that revokes it. Such a CVM is the one
+being retired — stop it, then run the command again.
 
 ---
 
