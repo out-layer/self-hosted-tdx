@@ -215,6 +215,11 @@ port (which is a node-local smoke-test only).
 
 ## Redeploy + gotchas
 
+- **Start keystore instances ONE AT A TIME** (also after a node reboot or a fleet-wide restart). Every
+  instance signs `submit_keystore_registration` with the same `init-keystore.outlayer.<net>` account;
+  two instances booting in the same second race on its nonce, the loser's transaction is rejected
+  before inclusion and that instance stays not-ready with no port until you `outlayer restart` it.
+  Start the next one only after the previous logs `Keystore is now ready`.
 - **Same `APP_NAME` → replace-on-redeploy.** The script stops+removes the existing CVM with that VM
   label first, so re-running redeploys in place. The app-id/URL stay the same (deterministic compose).
 - **Gateway REDEPLOY couples to the keystore.** A gateway *restart* is transparent (app-id + port 9202
