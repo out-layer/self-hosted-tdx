@@ -39,6 +39,11 @@ services:
       INIT_ACCOUNT_ID: ${INIT_ACCOUNT_ID:-}
       INIT_ACCOUNT_PRIVATE_KEY: ${INIT_ACCOUNT_PRIVATE_KEY:-}
       KEYSTORE_BASE_URLS: ${KEYSTORE_BASE_URLS:-}
+      # Routes this node will not run (`<project>:<operation>`, comma-separated) —
+      # the node's geography, declared by the operator; the coordinator hands
+      # those tasks to another worker. Passed through here or the worker never
+      # sees it: this compose lists every variable the container gets.
+      EXECUTE_EXCLUDES: ${EXECUTE_EXCLUDES:-}
       KEYSTORE_AUTH_TOKEN: ${KEYSTORE_AUTH_TOKEN:-}
       RUST_LOG: ${RUST_LOG:-info}
       SAVE_SYSTEM_HIDDEN_LOGS_TO_DEBUG: ${SAVE_SYSTEM_HIDDEN_LOGS_TO_DEBUG:-false}
