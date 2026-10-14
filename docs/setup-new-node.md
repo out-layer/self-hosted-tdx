@@ -283,9 +283,11 @@ file is missing, and `KMS_IMAGE` is not in its `required_env_vars`, so it fails 
 delete the dead KMS CVM and redeploy —
 
 ```bash
-NAME=kms /home/outlayer/self-hosted-tdx/worker-ctl.sh remove   # only ever a KMS that never came up:
-                                                               # deleting a HEALTHY one destroys the
-                                                               # sealed root key and all app keys
+NAME=kms /home/outlayer/self-hosted-tdx/worker-ctl.sh remove -f  # only ever a KMS that never came up:
+                                                                  # deleting a HEALTHY one destroys the
+                                                                  # sealed root key and all app keys.
+                                                                  # -f: a guest that never booted cannot
+                                                                  # take a soft shutdown
 cd /home/outlayer/self-hosted-tdx && ./30-deploy-kms.sh
 ```
 

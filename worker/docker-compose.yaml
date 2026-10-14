@@ -16,6 +16,11 @@ services:
   worker:
     image: docker.io/outlayer/near-outlayer-worker@sha256:REPLACE_WITH_RELEASE_DIGEST
     restart: on-failure:5
+    # A soft stop (`worker-ctl.sh stop`, i.e. `vmm stop` without -f) sends SIGTERM:
+    # the worker takes no new task, finishes the one in hand and exits 0. 85 s covers
+    # one 30 s poll plus p99.9 of a task (35 s on mainnet) and stays under the
+    # guest systemd's 90 s stop timeout.
+    stop_grace_period: 85s
     environment:
       API_BASE_URL: ${API_BASE_URL}
       API_AUTH_TOKEN: ${API_AUTH_TOKEN}

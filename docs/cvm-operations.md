@@ -27,12 +27,30 @@ auto-discovers the reassigned agent port for logs — so you never deal with the
 worker-ctl.sh status            # lsvm
 worker-ctl.sh logs              # last 200 worker app-log lines (snapshot)
 worker-ctl.sh follow            # stream worker app logs
-worker-ctl.sh restart           # stop -f + start  (re-runs registration)
-worker-ctl.sh stop | start
+worker-ctl.sh stop              # SOFT: the worker finishes the task in hand, takes no new one, exits
+worker-ctl.sh stop -f           # FORCED: power off now — a running task is cut
+worker-ctl.sh start
+worker-ctl.sh restart [-f]      # stop (soft unless -f) + start  (re-runs registration)
+worker-ctl.sh remove [-f] <cvm> # stop (soft unless -f) + delete the CVM and its disk
 worker-ctl.sh port              # current agent host port (for ad-hoc curl)
 worker-ctl.sh serial            # qemu serial console (boot/system, not app logs)
 NAME=outlayer-worker-mainnet worker-ctl.sh follow   # target a different CVM by name
 ```
+
+**Soft stop.** `stop`, `restart` and `remove` ask the guest to power off (`vmm stop` without
+`-f`): inside the CVM `systemctl poweroff` runs `docker compose stop`, which sends the worker
+SIGTERM. The worker polls for nothing more, finishes the task it holds and exits; the compose
+gives it 85 s (`stop_grace_period`) before the guest kills it. The wrapper waits until the VM is
+down (at most `SOFT_STOP_TIMEOUT`, 180 s; `worker-ctl.sh follow` in another shell shows the
+worker's log meanwhile) and forces nothing:
+when the guest does not take the request (guest-agent not answering) or does not power off in
+time, it says so and leaves the choice of `-f` to you. A worker image without the SIGTERM handler
+ignores the signal and is killed after the grace period, so for it a soft stop is a forced one
+that came late. A hung worker is the case for `-f`: it ignores the request too.
+
+A soft stop clears the VM's `started` flag, as a forced one does: the vmm will not start it again
+by itself, not even after a host reboot. Before a planned host reboot, soft-stop the workers (a
+host shutdown kills qemu without a guest shutdown) and `start` them afterwards.
 
 The rest of this doc explains what the wrapper does under the hood (and is the fallback
 if the script isn't present).

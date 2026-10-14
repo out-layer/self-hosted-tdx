@@ -10,8 +10,11 @@
 #   ./worker-ctl.sh status                 # lsvm
 #   ./worker-ctl.sh logs                   # last 200 worker app-log lines (snapshot)
 #   ./worker-ctl.sh follow                 # stream worker app logs (Ctrl-C to stop)
-#   ./worker-ctl.sh restart                # stop -f + start (re-runs registration)
-#   ./worker-ctl.sh remove <cvm-name>      # stop + delete the CVM (record + disk) — destructive
+#   ./worker-ctl.sh stop <cvm-name>        # SOFT: SIGTERM inside the CVM; a worker finishes the task in
+#                                          # hand, takes no new one, exits; waits until the VM is down
+#   ./worker-ctl.sh stop -f <cvm-name>     # FORCED: power off now — a running task is cut
+#   ./worker-ctl.sh restart [-f]           # stop (soft unless -f) + start (re-runs registration)
+#   ./worker-ctl.sh remove [-f] <cvm-name> # stop (soft unless -f) + delete the CVM (record + disk) — destructive
 #   ./worker-ctl.sh port                   # print the current agent host port
 #   ./worker-ctl.sh keystore-keys testnet  # `export KEEP_<SITE>="<key> <key>"` (KEEP_DAL / KEEP_AMS) = the
 #                                          # registration keys of every running <net>-keystore-* CVM here;
@@ -30,6 +33,9 @@ U="${VMM_URL:-http://127.0.0.1:11000}"
 NAME="${NAME:-outlayer-worker}"          # CVM name (lsvm); override via env or positional arg
 CONTAINER="${CONTAINER:-}"               # app-log container; auto-picked from NAME below if empty
 TAIL="${TAIL:-200}"
+# How long a soft stop waits for the guest to power off. The worker's compose gives it 85 s
+# (stop_grace_period) before the guest kills it, so a guest still up after this is stuck.
+SOFT_STOP_TIMEOUT="${SOFT_STOP_TIMEOUT:-180}"
 
 vmm() { python3 "$V" --url "$U" "$@"; }
 
@@ -73,6 +79,11 @@ need_uuid() {
 }
 
 cmd="${1:-status}"; shift || true
+# -f / --force anywhere after the subcommand: stop, restart and remove power the VM off at once.
+FORCE=0
+ARGS=()
+for a in "$@"; do case "$a" in -f|--force) FORCE=1 ;; *) ARGS+=("$a") ;; esac; done
+set -- ${ARGS[@]+"${ARGS[@]}"}
 # optional positional CVM name after the subcommand: `worker-ctl.sh logs <name>`
 # (for keystore-keys the positional is the network, kept apart from NAME)
 NAME_ARG=""
@@ -88,6 +99,48 @@ esac
 # resolution failure (need_uuid's `exit` inside $() would otherwise be swallowed, leaving an
 # empty uuid that agent_port matches to the first qemu). `|| exit 1` stops cleanly on error.
 case "$cmd" in status|ls|keystore-keys|'') : ;; *) u=$(need_uuid) || exit 1 ;; esac
+
+# Whether a qemu process for this uuid is alive.
+vm_alive() { pgrep -f "qemu-system-x86_64.*$1" >/dev/null; }
+
+# Stop the VM: forced (power off now) with -f, otherwise soft. A soft stop asks the guest to
+# power off (`vmm stop` without -f → systemctl poweroff → docker compose stop → SIGTERM): a worker
+# takes no new task, finishes the one in hand and exits, and the guest kills it after its
+# stop_grace_period anyway. Waits until the VM is down; `follow` in another shell shows the log.
+# Returns non-zero, having cut nothing, when the guest does not take the request or does not
+# power off in time — the operator then decides on -f.
+stop_vm() {
+  local uuid="$1" start elapsed
+  if [ "$FORCE" = 1 ]; then
+    echo "forced stop of $NAME: a running task is cut"
+    # An error from a VM that is already down is not a failure (remove -f of a stopped CVM).
+    vmm stop -f "$uuid" || ! vm_alive "$uuid"
+    return
+  fi
+  if ! vm_alive "$uuid"; then
+    # Nothing to cut, but its `started` flag may still be set (a VM that exited on its own), and
+    # the vmm restarts such a VM within 20 s: the forced stop clears the flag.
+    vmm stop -f "$uuid" >/dev/null 2>&1 || true
+    echo "$NAME is not running"
+    return 0
+  fi
+  start=$(date +%s)
+  if ! vmm stop "$uuid"; then
+    echo "worker-ctl: the guest did not take the shutdown request (guest-agent not answering — frozen?)." >&2
+    echo "            Nothing was stopped. To power it off anyway: $0 stop -f $NAME" >&2
+    return 1
+  fi
+  while vm_alive "$uuid"; do
+    elapsed=$(( $(date +%s) - start ))
+    if [ "$elapsed" -ge "$SOFT_STOP_TIMEOUT" ]; then
+      echo "worker-ctl: $NAME still running ${elapsed}s after the shutdown request; nothing was forced." >&2
+      echo "            To power it off anyway (a running task is cut): $0 stop -f $NAME" >&2
+      return 1
+    fi
+    sleep 2
+  done
+  echo "stopped $NAME after $(( $(date +%s) - start ))s (soft)"
+}
 
 # The DAO registration key of every RUNNING keystore CVM on this node, as one
 # `export KEEP_<SITE>="<key> <key>"` line for scripts/revoke_old_keystore_keys.sh, which requires
@@ -140,9 +193,10 @@ case "$cmd" in
   follow|f)   p=$(agent_port "$u"); [ -n "${p:-}" ] || { echo "no agent port (VM not running?)" >&2; exit 1; }
               curl -sN "http://127.0.0.1:$p/logs/$CONTAINER?text=true&bare=true&follow=true&tail=$TAIL" ;;
   serial)     vmm logs -n "$TAIL" "$u" ;;   # qemu serial console (boot/system, not app)
-  stop)       vmm stop -f "$u" ;;
+  stop)       stop_vm "$u" ;;
   start)      vmm start "$u" ;;
-  restart)    vmm stop -f "$u"; vmm start "$u"; echo "restarted $NAME ($u) — re-run '$0 follow' to watch (port changed)" ;;
-  remove|rm)  vmm stop -f "$u" >/dev/null 2>&1 || true; vmm remove "$u" && echo "REMOVED $NAME ($u) — CVM + disk deleted (gone from lsvm; not recoverable)" ;;
-  *) echo "usage: $0 <status|info|uuid|port|logs|follow|serial|stop|start|restart|remove> [cvm-name] | keystore-keys <testnet|mainnet>" >&2; exit 1 ;;
+  restart)    stop_vm "$u" || exit 1; vmm start "$u"; echo "restarted $NAME ($u) — re-run '$0 follow' to watch (port changed)" ;;
+  remove|rm)  stop_vm "$u" || { echo "worker-ctl: $NAME not removed" >&2; exit 1; }
+              vmm remove "$u" && echo "REMOVED $NAME ($u) — CVM + disk deleted (gone from lsvm; not recoverable)" ;;
+  *) echo "usage: $0 <status|info|uuid|port|logs|follow|serial|stop|start|restart|remove> [-f] [cvm-name] | keystore-keys <testnet|mainnet>" >&2; exit 1 ;;
 esac

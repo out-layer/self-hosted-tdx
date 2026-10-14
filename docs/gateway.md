@@ -449,7 +449,7 @@ auto-picks the `dstack-gateway-1` container):
 worker-ctl.sh status                      # list all CVMs (find dstack-gateway + its status)
 NAME=dstack-gateway worker-ctl.sh logs    # gateway app logs (snapshot)
 NAME=dstack-gateway worker-ctl.sh follow  # stream gateway logs (Ctrl-C to stop)
-NAME=dstack-gateway worker-ctl.sh restart # stop -f + start  (re-runs the boot-time cert check)
+NAME=dstack-gateway worker-ctl.sh restart # soft stop + start (re-runs the boot-time cert check); -f forces
 NAME=dstack-gateway worker-ctl.sh stop    # stop the gateway CVM
 NAME=dstack-gateway worker-ctl.sh start   # start a stopped gateway CVM
 NAME=dstack-gateway worker-ctl.sh serial  # qemu boot/serial console (boot or attestation issues)
