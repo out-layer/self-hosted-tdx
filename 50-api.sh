@@ -106,8 +106,13 @@ fi
 
 step "6. firewall (managed blocks)"
 managed() { # file begin-marker end-marker anchor-line insert(before|after) block
-  local file=$1 begin=$2 end=$3 anchor=$4 where=$5 block=$6 out
+  local file=$1 begin=$2 end=$3 anchor=$4 where=$5 block=$6 out cur
   grep -qxF -- "$anchor" "$file" || { echo "  $file has no line '$anchor'" >&2; exit 1; }
+  # An identical block stays where it is. Two blocks share an anchor, and re-inserting each at it
+  # would swap them on every run: the file rewritten and ufw reloaded for nothing. Their order
+  # does not matter, the addresses they name do not overlap.
+  cur=$(awk -v b="$begin" -v e="$end" '$0 == b { p = 1 } p { print } p && $0 == e { exit }' "$file")
+  if [ "$cur" = "$block" ]; then echo "  $file: up to date"; return 1; fi
   out=$(mktemp)
   awk -v b="$begin" -v e="$end" -v a="$anchor" -v w="$where" -v blk="$block" '
     $0 == b { skip = 1; next }  skip && $0 == e { skip = 0; next }  skip { next }

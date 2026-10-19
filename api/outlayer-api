@@ -57,6 +57,9 @@ cmd="${1:-ps}"; shift || true
 case "$cmd" in
   deploy)
     cd "$API_HOME/src"
+    # `git pull` moves the submodule pointers only. vendor/api-spec is compiled in (the served
+    # openapi.json), so the checkout must follow the pointer before the build.
+    git submodule update --init --recursive
     # Same as run_coordinator.sh: shared-tee-helpers follows its main branch. The repository's
     # .cargo/config.toml patches it to a sibling checkout for local development; it is masked
     # here (the image build never reads it).
