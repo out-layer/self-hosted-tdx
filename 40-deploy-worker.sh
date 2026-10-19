@@ -38,6 +38,7 @@ APP_NAME="${APP_NAME:-outlayer-worker}"
 COMPOSE_NAME="${COMPOSE_NAME:-$APP_NAME}"
 
 [ -f "$ENVFILE" ] || { echo "Missing $ENVFILE (cp from worker/<net>-worker.env.template + fill secrets)"; exit 1; }
+[ "$(stat -c %a "$ENVFILE")" = 600 ] || { echo "$ENVFILE holds secrets and is mode $(stat -c %a "$ENVFILE"); run: chmod 600 $ENVFILE"; exit 1; }
 echo "[env] reading secrets from: $(readlink -f "$ENVFILE" 2>/dev/null || echo "$ENVFILE")  (on $(hostname))"
 
 echo "[1/3] Resolve verifiable worker digest for $VERSION..."

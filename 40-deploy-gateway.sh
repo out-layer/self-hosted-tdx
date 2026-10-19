@@ -66,7 +66,9 @@ MEMORY="${MEMORY:-4G}"
 DISK="${DISK:-10G}"
 
 [ -f "$ENVFILE" ] || { echo "Missing $ENVFILE (cp from gateway/gateway.env.template + fill)"; exit 1; }
+[ "$(stat -c %a "$ENVFILE")" = 600 ] || { echo "$ENVFILE holds secrets and is mode $(stat -c %a "$ENVFILE"); run: chmod 600 $ENVFILE"; exit 1; }
 [ -f "$CF_TOKEN_FILE" ] || { echo "Missing $CF_TOKEN_FILE (scoped Cloudflare DNS-01 token, chmod 600)"; exit 1; }
+[ "$(stat -c %a "$CF_TOKEN_FILE")" = 600 ] || { echo "$CF_TOKEN_FILE holds secrets and is mode $(stat -c %a "$CF_TOKEN_FILE"); run: chmod 600 $CF_TOKEN_FILE"; exit 1; }
 [ -x "$VMM_CLI" ] || [ -f "$VMM_CLI" ] || { echo "vmm-cli not found at $VMM_CLI"; exit 1; }
 
 echo "[env] reading gateway deploy config from: $ENVFILE  (on $(hostname))"

@@ -83,6 +83,12 @@ ACME 80, the NEAR node ports). It keeps **all NEAR MPC node ports** and never bl
 traffic arrives on `lo`, which ufw always allows). Run the post-enable verification in the script
 header; rollback is `sudo ufw disable`.
 
+### 8b. Loopback guard (`46-lo-guard.sh`)
+The vmm control APIs (`127.0.0.1:11000`, `:10000`) have no auth: any local uid could stop a CVM.
+`46-lo-guard.sh` lets only root, `outlayer` and `mpc` open TCP connections to loopback services.
+Run it in log mode first (`--apply`), read a week of `journalctl -k | grep lo-guard`, then
+`LO_GUARD_MODE=reject ./46-lo-guard.sh --apply`. Dry-run by default; the header has the details.
+
 ### 9. Attestation portal + admin (later)
 The public attestation page (`workers.<domain>`) + authenticated `/admin` are a separate Rust service
 (`out-layer/attestation-portal`) — not required to run the fleet. Deploy once it ships.

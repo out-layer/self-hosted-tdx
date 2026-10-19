@@ -2,6 +2,9 @@
 worker.env
 *.env
 !*.env.template
+# The API stack's per-network settings: ports, subnets, sizes — no secret, and 50-api.sh needs them.
+!api/testnet.env
+!api/mainnet.env
 auth-config.json
 !auth-config.json.template
 *.key

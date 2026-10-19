@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# outlayer-<net>-api — the only way to operate the API stack on a TDX node. Every call is
+# `docker compose` with this stack's project, compose file and settings, so no command run
+# through it can reach the node's other containers (the key provider, aesmd) or the CVMs.
+# Installed by 50-api.sh as /usr/local/bin/outlayer-testnet-api or outlayer-mainnet-api: the
+# network is read from the name it is called by, so a command never reaches the other
+# network's stack by default. Run as root.
+#
+#   outlayer-testnet-api deploy            build the coordinator from $API_HOME/src, start/refresh the stack
+#   outlayer-testnet-api logs [svc]        follow logs (default: coordinator)
+#   outlayer-testnet-api ps                state of the four services
+#   outlayer-testnet-api restart|stop|start [svc]
+#   outlayer-testnet-api up                start every service without building
+#   outlayer-testnet-api psql              psql into the stack's database
+#   outlayer-testnet-api redis             redis-cli into the stack's Redis
+#   outlayer-testnet-api shutdown [why]    maintenance ON: every route but /health and /admin/*
+#                                          answers 503, workers get no work (docs/ADMIN.md)
+#   outlayer-testnet-api resume            maintenance OFF
+#   outlayer-testnet-api maintenance       the switch as stored: enabled, note, changed_at
+#   outlayer-testnet-api gc                build cache older than a week and this stack's
+#                                          dangling images; never another stack's or a container
+#
+# The day-to-day line (in `screen -S <net>-api`):
+#   cd /opt/outlayer-testnet-api/src && git pull && outlayer-testnet-api deploy && outlayer-testnet-api logs
+#
+set -euo pipefail
+case "$(basename "$0")" in
+  outlayer-testnet-api) NET=testnet ;;
+  outlayer-mainnet-api) NET=mainnet ;;
+  *) echo "call me as outlayer-testnet-api or outlayer-mainnet-api: the network is in the name" >&2; exit 1 ;;
+esac
+API_HOME="/opt/outlayer-$NET-api"
+ENV="$API_HOME/compose.env"
+[ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
+[ -f "$ENV" ] || { echo "$ENV missing: install the $NET stack with 50-api.sh first" >&2; exit 1; }
+
+# Runs as root on the node that carries the keystores: pinned, so a deploy never pulls an
+# image nobody looked at. Bump deliberately.
+RUST_IMAGE="rust:alpine@sha256:557a94c82b485a14b569120e00867267108c734efe33f10cc31ca0cd5dd1eca9"
+
+dc() { docker compose -p "outlayer-$NET-api" -f "$API_HOME/compose.yaml" --env-file "$ENV" --project-directory "$API_HOME" "$@"; }
+
+# The coordinator's own admin API, called from inside the stack (nginx → coordinator:8080), so
+# it works with Cloudflare out of the picture. The token is read from coordinator.env by root
+# and handed to curl on stdin: it is never on a command line.
+admin() { # method path [json-body]
+  local token
+  token=$(sed -n 's/^ADMIN_BEARER_TOKEN=//p' "$API_HOME/coordinator.env" | tail -1 | sed -E "s/^\"(.*)\"$/\1/; s/^'(.*)'$/\1/")
+  [ -n "$token" ] || { echo "no ADMIN_BEARER_TOKEN in $API_HOME/coordinator.env" >&2; exit 1; }
+  printf 'Authorization: Bearer %s\n' "$token" \
+    | dc exec -T nginx curl -sS --fail-with-body -H @- -H 'Content-Type: application/json' \
+        -X "$1" "http://coordinator:8080$2" ${3:+--data "$3"}
+  echo
+}
+
+cmd="${1:-ps}"; shift || true
+case "$cmd" in
+  deploy)
+    cd "$API_HOME/src"
+    # Same as run_coordinator.sh: shared-tee-helpers follows its main branch. The repository's
+    # .cargo/config.toml patches it to a sibling checkout for local development; it is masked
+    # here (the image build never reads it).
+    docker run --rm -v "$API_HOME/src:/w" -v /dev/null:/w/.cargo/config.toml:ro -w /w \
+      -v "outlayer-api-cargo:/usr/local/cargo/registry" "$RUST_IMAGE" cargo update -p shared-tee-helpers
+    GIT_SHA="$(git rev-parse --short=12 HEAD)"
+    [ -z "$(git status --porcelain --untracked-files=no)" ] || GIT_SHA="$GIT_SHA-dirty"
+    echo "building $GIT_SHA"
+    GIT_SHA="$GIT_SHA" dc build coordinator
+    dc up -d
+    dc ps
+    ;;
+  logs)    dc logs -f --tail 200 "${1:-coordinator}" ;;
+  ps)      dc ps ;;
+  up)      dc up -d "$@" ;;
+  restart|stop|start) dc "$cmd" "$@" ;;
+  psql)
+    set -a; . "$ENV"; set +a
+    dc exec postgres psql -U postgres -d "$PG_DB" ;;
+  shutdown)
+    body=$(python3 -c 'import json,sys; print(json.dumps({"enabled": True, "note": " ".join(sys.argv[1:]) or "maintenance"}))' "$@")
+    admin PUT /admin/maintenance "$body" ;;
+  resume)      admin PUT /admin/maintenance '{"enabled": false}' ;;
+  maintenance) admin GET /admin/maintenance ;;
+  gc)
+    # The only cleanup allowed on a TDX node: never `docker system/image prune` without a filter
+    # (the key provider and aesmd the CVMs need are containers on the same daemon).
+    docker builder prune -f --filter until=168h
+    docker image prune -f --filter "label=com.docker.compose.project=outlayer-$NET-api"
+    docker system df ;;
+  redis)
+    REDISCLI_AUTH="$(sed -n 's/^requirepass //p' "$API_HOME/secrets/redis.conf")" \
+      dc exec -e REDISCLI_AUTH redis redis-cli ;;
+  *) sed -n '2,20p' "$0"; exit 1 ;;
+esac

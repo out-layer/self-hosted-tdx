@@ -181,14 +181,14 @@ TOKEN_FILE="$KMSDIR/kms-admin-token.txt"
 # KMS_IMAGE must be set HERE (see the note at the top): deploy-simple.sh's own default only lands
 # in the .env.simple it generates when the file is absent, which never happens once we write it.
 #
-# KNOWN, DELIBERATE difference from the FIRST node (deployed before this script was hardened):
-# it binds KMS_RPC_ADDR / the auth webhook / imgsrv on 0.0.0.0, this script binds them on the host
-# loopback. CVMs are unaffected — qemu slirp maps their 10.0.2.2 to the host loopback, which is the
+# KNOWN, DELIBERATE difference from the FIRST node (dal, deployed before this script was hardened):
+# its KMS CVM still forwards KMS_RPC_ADDR on 0.0.0.0 (ufw-closed); this script binds it on the host
+# loopback. Its auth webhook and imgsrv units match this script (loopback). CVMs are unaffected — qemu slirp maps their 10.0.2.2 to the host loopback, which is the
 # same path the local key-provider on :3443 already uses, and all three were verified end-to-end on
 # the second node (webhook received the KMS boot request, the KMS downloaded the image from imgsrv,
 # and a worker CVM reached the KMS at kms.1022.dstack.org:11001). Loopback is strictly tighter than
-# relying on ufw alone. Align the first node DOWN to this when it is next redeployed; do not flip
-# this script UP to 0.0.0.0.
+# relying on ufw alone. Align the first node's KMS_RPC_ADDR DOWN to this when its KMS is next
+# redeployed; do not flip this script UP to 0.0.0.0.
 cat > "$APP/.env.simple" <<ENV
 VMM_RPC=$VMM_RPC
 AUTH_WEBHOOK_URL=http://10.0.2.2:$AUTH_PORT

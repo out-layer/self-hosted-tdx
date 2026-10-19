@@ -83,6 +83,16 @@ need). `worker/.env.<net>-worker-tdx` is the only secret file a worker node need
 ./sync-node.sh 23.109.254.164        # rsync into /home/outlayer/self-hosted-tdx, owner outlayer
 ```
 
+Secrets on the node are `0600`, owner `outlayer`:
+- every `.env*`, `*.env` and token file;
+- `sync-node.sh` sets that on each run, whatever mode the file had on the Mac;
+- the deploy scripts refuse an env file that is not `0600`.
+
+A secret copied by hand (`scp`, a paste into `vi`) gets `chmod 600` the same minute. Never leave
+a copy under `/root` or any other path. Check:
+`find / -xdev \( -name '.env*' -o -name '*.env' -o -name '*token*' \) -perm /044 2>/dev/null | grep -v -e template -e example`
+lists any that others can read.
+
 ```bash
 # on the node
 chmod 600 /home/outlayer/self-hosted-tdx/worker/.env.testnet-worker-tdx
@@ -373,9 +383,20 @@ near contract call-function as-read-only worker.outlayer.testnet get_workers \
 
 ## Firewall
 
-A worker node needs **no new inbound ports** — workers poll the coordinator outbound. Keep
+A worker node needs **no new inbound ports**: workers poll the coordinator outbound. Keep
 `45-firewall.sh`'s default-deny and only whatever that box already needed (SSH, and the NEAR node
 ports if it also runs one).
+
+Then the loopback guard, `46-lo-guard.sh`. The vmm control APIs on `127.0.0.1:11000`/`:10000` have
+no auth, so any local uid could stop a CVM. The guard lets only root, `outlayer` and `mpc` open
+connections to loopback services. It reads their uids on the node: they differ between nodes.
+
+```bash
+sudo ./46-lo-guard.sh                               # dry-run: the block + iptables check
+sudo ./46-lo-guard.sh --apply                       # log mode: records other uids, blocks nothing
+# a week later, after reading `journalctl -k | grep lo-guard`:
+sudo LO_GUARD_MODE=reject ./46-lo-guard.sh --apply  # enforce
+```
 
 ## 8. Attestation agent (optional — puts the node on workers.outlayer.ai)
 

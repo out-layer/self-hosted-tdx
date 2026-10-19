@@ -1,0 +1,127 @@
+# The OutLayer API (coordinator + Postgres + Redis + nginx) on a TDX node, caged.
+# Installed by ../50-api.sh into $API_HOME (/opt/outlayer-<net>-api) and run only through
+# `outlayer-<net>-api` (api/outlayer-api), which always passes this file, its compose.env and
+# the project name. Design and the reasons for each limit: api/README.md.
+#
+# Every service: its own uid (never root, never `outlayer`), no capabilities, no new
+# privileges, read-only root filesystem, resource limits, capped logs. The limits are generous
+# (the node has 128 CPUs, ~500 GB): they keep a runaway API from starving the CVMs, they do
+# not size the API. Data lives on a
+# fixed-size image mounted at $API_HOME/data; `create_host_path: false` makes a service
+# refuse to start when that image is not mounted, instead of initialising an empty
+# database on `/`.
+name: outlayer-${API_NET}-api
+
+x-cage: &cage
+  user: "2100:2100"
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  read_only: true
+  restart: unless-stopped
+  logging: { driver: json-file, options: { max-size: 50m, max-file: "5" } }
+
+# The coordinator and nginx logs are what an incident is read from, so they keep at least a week.
+# Mainnet writes ~180 MB/day (coordinator) and ~90 MB/day (nginx) to disk with docker's JSON
+# wrapping; 15 × 100 MB holds 8+ days of the larger one. Docker keeps these on the host's root
+# filesystem, not on the data image. Postgres and Redis log next to nothing and keep the cage's.
+x-logs-week: &logs-week
+  logging: { driver: json-file, options: { max-size: 100m, max-file: "15" } }
+
+services:
+  postgres:
+    <<: *cage
+    # alpine's own postgres uid: initdb refuses a uid that is not in the image's passwd.
+    user: "70:70"
+    image: postgres:14-alpine@sha256:8921207cecc9434deafb8c81a2a00d796df7aa99759f496db9acd53e630062e9
+    # Per network (<net>.env): the coordinator's DB_POOL_SIZE must stay below max_connections.
+    command: ["postgres", "-c", "max_connections=${PG_MAX_CONNECTIONS}", "-c", "shared_buffers=${PG_SHARED_BUFFERS}"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: ${PG_DB}
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg-password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - { type: bind, source: "${API_HOME}/data/postgres", target: /var/lib/postgresql/data, bind: { create_host_path: false } }
+      - { type: bind, source: "${API_HOME}/secrets/pg-password", target: /run/secrets/pg-password, read_only: true, bind: { create_host_path: false } }
+    tmpfs: [/tmp, /var/run/postgresql]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [db]
+    mem_limit: 32g
+    cpus: 16
+    pids_limit: 512
+
+  redis:
+    <<: *cage
+    image: redis:7.4.6-alpine@sha256:3b73847e72874be07e6657b129a94761662b79bc0f679273757d4218573b2a98
+    # The password is in the file, never on a command line (ps and docker inspect show those).
+    command: ["redis-server", "/etc/redis/redis.conf"]
+    volumes:
+      - { type: bind, source: "${API_HOME}/data/redis", target: /data, bind: { create_host_path: false } }
+      - { type: bind, source: "${API_HOME}/secrets/redis.conf", target: /etc/redis/redis.conf, read_only: true, bind: { create_host_path: false } }
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(sed -n 's/^requirepass //p' /etc/redis/redis.conf)\" redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [db]
+    mem_limit: 4g
+    cpus: 2
+    pids_limit: 128
+
+  coordinator:
+    <<: [*logs-week, *cage]
+    # The coordinator drains for up to 25 s on SIGTERM (outlayer-coordinator src/shutdown.rs);
+    # docker waits longer than that before it kills.
+    stop_grace_period: 35s
+    build:
+      context: ${API_HOME}/src
+      dockerfile: docker/Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-}
+    image: outlayer-${API_NET}-coordinator:local
+    env_file: ${API_HOME}/coordinator.env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    volumes:
+      - { type: bind, source: "${API_HOME}/data/wasm", target: /var/offchainvm/wasm, bind: { create_host_path: false } }
+    tmpfs: [/tmp]
+    networks:
+      # A fixed address: nginx resolves its upstream once at start, and a coordinator
+      # recreated on a new address would leave it proxying to nothing.
+      edge: { ipv4_address: "${API_COORDINATOR_IP}" }
+      db: {}
+    mem_limit: 16g
+    cpus: 16
+    pids_limit: 4096
+    # docker's default soft limit is 1024 open files: workers' long polls, clients, the DB pool
+    # and outbound calls would run out of sockets long before the CPU does.
+    ulimits: { nofile: { soft: 65536, hard: 65536 } }
+
+  nginx:
+    <<: [*logs-week, *cage]
+    image: nginxinc/nginx-unprivileged:1.28-alpine@sha256:7377697a821c131a924a7105fafbe7414db4e9fcc77a6f08f776f33f141ec3f8
+    volumes:
+      - { type: bind, source: "${API_HOME}/nginx/nginx.conf", target: /etc/nginx/nginx.conf, read_only: true, bind: { create_host_path: false } }
+      - { type: bind, source: "${API_HOME}/nginx/certs", target: /etc/nginx/certs, read_only: true, bind: { create_host_path: false } }
+    tmpfs: [/tmp, /var/cache/nginx]
+    # The IPv4 address only: a port published on [::] goes through docker-proxy, past the
+    # IPv4 DOCKER-USER rule that admits Cloudflare alone.
+    ports: ["${API_PUBLIC_IP}:${API_PORT}:8443"]
+    depends_on: [coordinator]
+    networks: [edge]
+    mem_limit: 2g
+    cpus: 4
+    pids_limit: 512
+    ulimits: { nofile: { soft: 65536, hard: 65536 } }   # 4 workers × 4096 connections
+
+networks:
+  edge:
+    ipam: { config: [{ subnet: "${API_SUBNET_EDGE}" }] }
+  db:
+    internal: true
+    ipam: { config: [{ subnet: "${API_SUBNET_DB}" }] }
