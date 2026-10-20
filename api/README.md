@@ -89,7 +89,7 @@ ours. Their records keep pointing to the old host, which answers every request w
 
 ## Installing
 
-1. From the Mac: `./sync-node.sh <host> --exclude 'worker/.env.testnet-worker-tdx'`.
+1. From the Mac: `./sync-node.sh <host>`.
 2. On the node, in `/home/outlayer/self-hosted-tdx`:
    ```bash
    ./50-api.sh testnet             # dry-run: the plan + what is missing
