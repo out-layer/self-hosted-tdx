@@ -208,3 +208,40 @@ measured.** Consequences:
 
 Targeting a worker: `worker-ctl.sh` resolves by **exact name** (the `Name` column in `status`) or a
 **uuid** — *not* by App ID (an App ID maps to many workers, so it's rejected as ambiguous).
+
+## Changing the guest OS image (a dstack upgrade)
+
+A CVM's guest OS is the dstack image under `build/images/<name>`. `15-add-os-image.sh <version>
+<os_image_hash>` adds one: download, two hash checks (the GitHub asset digest, and the release
+note's `os_image_hash` against the image's `digest.txt`), the KMS `osImages` allowlist, and a
+`<os_image_hash>.tar.gz` in the KMS image server directory (`~outlayer/outlayer-kms/imgsrv`).
+
+**The KMS verifies a new image by downloading it.** On a key request for an `os_image_hash` it has
+not cached, the KMS fetches `IMAGE_DOWNLOAD_URL` (with `{OS_IMAGE_HASH}` substituted), unpacks it,
+runs `sha256sum -c` and requires sha256(`sha256sum.txt`) to equal the hash; the result is cached in
+`/kms/images/<hash>` on the KMS's persistent volume. Our KMS URL names a fixed file,
+`http://10.0.2.2:11008/dstack-0.5.11.tar.gz`, so the first CVM boot on a new image loops on
+`os_image_hash does not match sha256sum of the sha256sum.txt` until that name serves the new
+tarball. For that first boot only (images already cached do not touch the URL):
+```bash
+cd /home/outlayer/outlayer-kms/imgsrv          # as root; the real files are named by hash
+sudo -u outlayer ln -sfn <new_hash>.tar.gz dstack-0.5.11.tar.gz   # first boot on the new image
+journalctl -u outlayer-imgsrv -f                                   # the GET, then the boot goes on
+sudo -u outlayer ln -sfn <old_hash>.tar.gz dstack-0.5.11.tar.gz   # back, right after
+```
+When the KMS is next redeployed, set `IMAGE_DOWNLOAD_URL=http://10.0.2.2:11008/{OS_IMAGE_HASH}.tar.gz`
+and this step disappears.
+
+Moving a CVM to the image is `worker-ctl.sh set-image <cvm-name> <image>`: soft stop,
+`vmm-cli resize --image`, start. The app-id, URL, disk, encrypted env, ports and instance-id stay;
+the measurements change (0.5.11 → 0.5.12 changed RTMR1 and RTMR2; RTMR3 differs per node, its KMS
+root is in it), so the CVM cannot register until its five measurements are approved on each
+node. Run it through `scripts/deploy_tdx.sh <worker|keystore> <net> <cvm-name> --version <ver>
+--node root@<host> --os-image <image>`: set-image, measurements from the CVM's guest agent, then
+the same approve (worker) or approve + proposal + vote (keystore) as a deploy. A worker keeps its
+registered key on its disk and does not register again. A keystore makes a new key and a new
+proposal on every boot; the orchestrator votes only on a proposal newer than any already in its
+log. Rollback is `set-image` back to the previous image: its measurements stay approved
+(`clear_others:false`). The KMS CVM's own `mr_aggregated` changes with its image and must be
+appended to `kms.mrAggregated` (30-deploy-kms.sh step 6) — do that one in a maintenance window,
+it gates every boot on the node.

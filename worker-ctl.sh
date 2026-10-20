@@ -15,6 +15,10 @@
 #   ./worker-ctl.sh stop -f <cvm-name>     # FORCED: power off now — a running task is cut
 #   ./worker-ctl.sh restart [-f]           # stop (soft unless -f) + start (re-runs registration)
 #   ./worker-ctl.sh remove [-f] <cvm-name> # stop (soft unless -f) + delete the CVM (record + disk) — destructive
+#   ./worker-ctl.sh set-image <cvm-name> <image>  # boot the CVM on another guest OS image (15-add-os-image.sh
+#                                          # adds one): soft stop, `vmm-cli resize --image`, start. App-id, disk,
+#                                          # env and ports stay; the measurements change, so they must be
+#                                          # approved again (scripts/deploy_tdx.sh --os-image does it)
 #   ./worker-ctl.sh port                   # print the current agent host port
 #   ./worker-ctl.sh keystore-keys testnet  # `export KEEP_<SITE>="<key> <key>"` (KEEP_DAL / KEEP_AMS) = the
 #                                          # registration keys of every running <net>-keystore-* CVM here;
@@ -196,7 +200,14 @@ case "$cmd" in
   stop)       stop_vm "$u" ;;
   start)      vmm start "$u" ;;
   restart)    stop_vm "$u" || exit 1; vmm start "$u"; echo "restarted $NAME ($u) — re-run '$0 follow' to watch (port changed)" ;;
+  set-image)  img="${1:?usage: $0 set-image <cvm-name> <image>}"
+              vmm lsimage 2>/dev/null | grep -q "│ $img " \
+                || { echo "worker-ctl: image '$img' is not in the vmm's image dir (vmm-cli lsimage; 15-add-os-image.sh adds one)" >&2; exit 1; }
+              stop_vm "$u" || exit 1
+              vmm resize "$u" --image "$img"
+              vmm start "$u"
+              echo "$NAME ($u) now boots $img — its measurements changed: approve them before it can register (scripts/deploy_tdx.sh --os-image)" ;;
   remove|rm)  stop_vm "$u" || { echo "worker-ctl: $NAME not removed" >&2; exit 1; }
               vmm remove "$u" && echo "REMOVED $NAME ($u) — CVM + disk deleted (gone from lsvm; not recoverable)" ;;
-  *) echo "usage: $0 <status|info|uuid|port|logs|follow|serial|stop|start|restart|remove> [-f] [cvm-name] | keystore-keys <testnet|mainnet>" >&2; exit 1 ;;
+  *) echo "usage: $0 <status|info|uuid|port|logs|follow|serial|stop|start|restart|remove> [-f] [cvm-name] | set-image <cvm-name> <image> | keystore-keys <testnet|mainnet>" >&2; exit 1 ;;
 esac
