@@ -37,7 +37,7 @@ If `gateway_app_id` is empty, the keystore will reboot-loop with `Missing allowe
 id`. Re-run `40-deploy-gateway.sh deploy` (it auto-sets it) — do NOT hand-deploy the keystore first.
 
 ### B. The OS + keystore image
-- `IMAGE_OS=dstack-0.5.11` must exist in the vmm image dir (`vmm-cli lsimage`).
+- `IMAGE_OS=dstack-0.5.12` must exist in the vmm image dir (`vmm-cli lsimage`; `15-add-os-image.sh` adds it).
 - The keystore container image is pinned **by digest** and is Sigstore-attested. `40-deploy-keystore.sh`
   resolves the `| keystore |` digest for the chosen `--version` from the GitHub release. On a node
   **without `gh`** (the TDX node), resolve + verify the digest once on a trusted machine and pass it in:

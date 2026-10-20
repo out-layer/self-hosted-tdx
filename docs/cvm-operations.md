@@ -240,8 +240,9 @@ node. Run it through `scripts/deploy_tdx.sh <worker|keystore> <net> <cvm-name> -
 --node root@<host> --os-image <image>`: set-image, measurements from the CVM's guest agent, then
 the same approve (worker) or approve + proposal + vote (keystore) as a deploy. A worker keeps its
 registered key on its disk and does not register again. A keystore makes a new key and a new
-proposal on every boot; the orchestrator votes only on a proposal newer than any already in its
-log. Rollback is `set-image` back to the previous image: its measurements stay approved
+proposal on every boot, and its container log survives a restart; the orchestrator counts only
+the lines logged after its own restart (by the node's clock) and votes only on the proposal whose
+key is the one that boot announced, still pending on the DAO. Rollback is `set-image` back to the previous image: its measurements stay approved
 (`clear_others:false`). The KMS CVM's own `mr_aggregated` changes with its image and must be
 appended to `kms.mrAggregated` (30-deploy-kms.sh step 6) — do that one in a maintenance window,
 it gates every boot on the node.

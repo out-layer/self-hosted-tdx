@@ -45,7 +45,7 @@ COMPOSE="$HERE/keystore/docker-compose.yaml"
 ENVFILE="${ENVFILE:-$HERE/keystore/keystore.env}"
 [ -f "$ENVFILE" ] || ENVFILE="$HERE/$ENVFILE"
 VMM_CLI="${VMM_CLI:-/opt/mpc/dstack/vmm/src/vmm-cli.py}"   # adjust to your dstack path
-IMAGE_OS="${IMAGE_OS:-dstack-0.5.11}"   # must exist in vmm's image dir (vmm-cli lsimage); affects MRTD/RTMR0-2
+IMAGE_OS="${IMAGE_OS:-dstack-0.5.12}"   # must exist in vmm's image dir (vmm-cli lsimage); affects MRTD/RTMR0-2
 # KMS_URL is used for BOTH (a) host-side env-encryption at deploy AND (b) baked into the CVM as
 # its RUNTIME kms_urls (vmm-cli.py: params["kms_urls"]=args.kms_url). So it MUST be the URL the
 # CVM uses at runtime: https://kms.1022.dstack.org:11001 -> resolves to 10.0.2.2 (the host) via

@@ -123,7 +123,11 @@ su - outlayer -c 'cd ~/self-hosted-tdx && DSTACK_ROOT=/home/outlayer ./10-build-
 
 `DSTACK_ROOT=/home/outlayer` is **required**: the script's own default is `~/dstack-node`, but
 `20-start-vmm.sh` and `30-deploy-kms.sh` expect `/home/outlayer/meta-dstack`. The version must match
-the `IMAGE_OS` / `OS_IMAGE` the deploy scripts use (`dstack-0.5.11`) — it feeds MRTD/RTMR0-2.
+the `OS_IMAGE` the KMS and gateway deploys use (`dstack-0.5.11`) — it feeds MRTD/RTMR0-2. Workers and
+keystores boot `dstack-0.5.12` (the `IMAGE_OS` default of 40-deploy-{worker,keystore}.sh); add it with
+`./15-add-os-image.sh 0.5.12 8db40cb23008d6213668b5816702d100b37b859a8a5bfd18d938ae3a1b3715bd` once the
+KMS is up (step 4), and point the image server at it for the first boot (cvm-operations.md, "Changing the
+guest OS image").
 
 ## 3. Start this node's vmm
 
@@ -269,7 +273,7 @@ su - outlayer
 cd ~/self-hosted-tdx
 echo "127.0.0.1 kms.1022.dstack.org # tmp" | sudo tee -a /etc/hosts
 python3 "$VMM_CLI" --url http://127.0.0.1:11000 deploy --name <vm> \
-  --compose worker/app-compose.json --image dstack-0.5.11 \
+  --compose worker/app-compose.json --image dstack-0.5.12 \
   --env-file worker/.env.testnet-worker-tdx --kms-url https://kms.1022.dstack.org:11001 \
   --vcpu 2 --memory 1G --disk 1G --port tcp:127.0.0.1:9210:8090
 # (vCPU/memory feed RTMR0, so a value different from 40-deploy-worker.sh's produces a different
