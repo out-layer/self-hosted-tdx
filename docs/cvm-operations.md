@@ -243,6 +243,13 @@ registered key on its disk and does not register again. A keystore makes a new k
 proposal on every boot, and its container log survives a restart; the orchestrator counts only
 the lines logged after its own restart (by the node's clock) and votes only on the proposal whose
 key is the one that boot announced, still pending on the DAO. Rollback is `set-image` back to the previous image: its measurements stay approved
-(`clear_others:false`). The KMS CVM's own `mr_aggregated` changes with its image and must be
-appended to `kms.mrAggregated` (30-deploy-kms.sh step 6) — do that one in a maintenance window,
-it gates every boot on the node.
+(`clear_others:false`).
+
+**Never `set-image` the KMS CVM.** Workers, keystores and the gateway get their keys from the KMS,
+by app-id, so a new image keeps them. The KMS gets its own from the local key-provider, and that
+key is `SHA256(sgx_sealing_key ‖ MRTD ‖ RTMR0 ‖ RTMR1 ‖ RTMR2 ‖ RTMR3)` of the asking CVM
+(gramine-sealing-key-provider, `src/quote/handler.rs`). A new OS image changes RTMR1/RTMR2
+(0.5.11 → 0.5.12 did), so the KMS would boot with another key, could not open what it sealed —
+its root key — and every key derived from it on this node would be gone: every CVM's disk and
+env, the gateway's trust. A KMS reaches a new image only by a migration that carries the root key
+over (a new KMS onboarded from the old one), not by changing the image under it.
