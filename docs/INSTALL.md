@@ -89,6 +89,17 @@ The vmm control APIs (`127.0.0.1:11000`, `:10000`) have no auth: any local uid c
 Run it in log mode first (`--apply`), read a week of `journalctl -k | grep lo-guard`, then
 `LO_GUARD_MODE=reject ./46-lo-guard.sh --apply`. Dry-run by default; the header has the details.
 
+### 8c. CVM guard (`47-cvm-guard.sh`)
+A CVM's `10.0.2.2` is the host's loopback, and qemu runs as `outlayer`, so the loopback guard
+lets a CVM reach every host service the operator can: the vmm API (stop any CVM), the gateway
+admin RPC, every other CVM's guest-agent (logs; on dstack < 0.5.12 its env too). `47-cvm-guard.sh`
+tells a CVM apart by cgroup (qemu lives in the vmm service's) and lets it reach only the resolver,
+the KMS (`11001`), the key-provider (`3443`) and the KMS CVM's own webhook/image ports (`3001`,
+`11008`); the control ports are refused on any local address. Nothing restarts. The jump into the
+guard is re-armed by `/usr/local/sbin/cvm-guard-rearm` on every vmm start (drop-in), after every
+reload our scripts make, and by `cvm-guard.timer`. Log mode first (`--apply`), one boot of every CVM
+kind, `journalctl -k | grep cvm-guard`, then `CVM_GUARD_MODE=reject ./47-cvm-guard.sh --apply`.
+
 ### 9. Attestation portal + admin (later)
 The public attestation page (`workers.<domain>`) + authenticated `/admin` are a separate Rust service
 (`out-layer/attestation-portal`) — not required to run the fleet. Deploy once it ships.

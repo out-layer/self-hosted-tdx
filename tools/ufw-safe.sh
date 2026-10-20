@@ -35,6 +35,12 @@ ufw_reload_checked() {
      && iptables -S ufw-before-input | grep -q -- '-i lo -j ACCEPT' \
      && iptables -S ufw-before-input | grep -q 'RELATED,ESTABLISHED -j ACCEPT' \
      && eval "$check"; then
+    # The reload flushed the CVM guard's run-time jump (47-cvm-guard.sh): put it back. The
+    # rules files are right either way, so a failure here is reported, not rolled back.
+    if [ -x /usr/local/sbin/cvm-guard-rearm ] && ! /usr/local/sbin/cvm-guard-rearm --check; then
+      echo "!! the CVM guard is NOT armed after this reload: run /usr/local/sbin/cvm-guard-rearm and read its message" >&2
+      return 1
+    fi
     return 0
   fi
   echo "!! the reload did not take: restoring the previous rules" >&2
