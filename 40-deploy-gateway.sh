@@ -50,6 +50,10 @@ DSTACK="${DSTACK:-/home/$NODE_USER/meta-dstack/dstack}"
 GW_APP_DIR="${GW_APP_DIR:-$DSTACK/gateway/dstack-app}"   # upstream deploy-to-vmm.sh lives here
 VMM_CLI="${VMM_CLI:-$DSTACK/vmm/src/vmm-cli.py}"
 KMSDIR="${KMSDIR:-/home/$NODE_USER/outlayer-kms}"        # auth-config.json lives here
+# The KMS boot-auth config + webhook unit this gateway registers with (v1 defaults; KMS v2:
+# AUTH_CONFIG=$KMSDIR/auth-config-v2.json AUTH_SERVICE=outlayer-kms-auth-v2.service).
+AUTH_CONFIG="${AUTH_CONFIG:-$KMSDIR/auth-config.json}"
+AUTH_SERVICE="${AUTH_SERVICE:-outlayer-kms-auth.service}"
 CF_TOKEN_FILE="${CF_TOKEN_FILE:-/home/$NODE_USER/gateway-cf-token}"
 ENVFILE="${ENVFILE:-$HERE/gateway/gateway.env}"
 [ -f "$ENVFILE" ] || ENVFILE="$HERE/$ENVFILE"
@@ -102,9 +106,9 @@ export NET_MODE GATEWAY_ADMIN_RPC_ADDR ADMIN_LISTEN_ADDR ADMIN_LISTEN_PORT GUEST
        GATEWAY_RPC_ADDR WG_ADDR GATEWAY_SERVING_PORT GATEWAY_SERVING_NUM_PORTS
 
 # C1: never run the stale upstream defaults.
-: "${OS_IMAGE:?set OS_IMAGE in gateway.env (must be dstack-0.5.11)}"
+: "${OS_IMAGE:?set OS_IMAGE in gateway.env (dstack-0.5.12)}"
 : "${GATEWAY_IMAGE:?set GATEWAY_IMAGE in gateway.env (locally-built 0.5.11 digest, registry-pullable)}"
-[ "$OS_IMAGE" = "dstack-0.5.11" ] || echo "WARN: OS_IMAGE=$OS_IMAGE (expected dstack-0.5.11)"
+case "$OS_IMAGE" in dstack-0.5.11|dstack-0.5.12) : ;; *) echo "WARN: OS_IMAGE=$OS_IMAGE (expected dstack-0.5.12)" ;; esac
 case "$GATEWAY_IMAGE" in
   *@sha256:*) : ;;  # digest-pinned, good
   *) echo "ERROR: GATEWAY_IMAGE must be digest-pinned (repo@sha256:...). Got: $GATEWAY_IMAGE"; exit 1 ;;
@@ -128,7 +132,6 @@ echo
 # KMS allowlist entry, and the node device allowlist must name THIS host or the gateway CVM is denied
 # at boot; the gatewayAppId field is upstream and is written by this script further down.
 # We only WARN (don't hard-fail): the files may live at a non-default path, and prep mode is harmless.
-AUTH_CONFIG="${AUTH_CONFIG:-/home/$NODE_USER/outlayer-kms/auth-config.json}"
 AUTH_INDEX="${AUTH_SIMPLE_INDEX:-$DSTACK/kms/auth-simple/index.ts}"
 if [ -f "$AUTH_INDEX" ] && ! { grep -q "allowAnyApp" "$AUTH_INDEX" && grep -q "deviceAllowlist" "$AUTH_INDEX"; } 2>/dev/null; then
   echo "WARN: auth-simple index.ts is NOT fully patched (allowAnyApp + device allowlist): $AUTH_INDEX"
@@ -150,7 +153,7 @@ if [ "$MODE" = bootstrap ]; then
       bash bootstrap-cluster.sh "$GATEWAY_ADMIN_RPC_ADDR" )
   echo
   echo "Done. Verify the wildcard cert landed (CertResolver should show 1+ domains):"
-  echo "  NAME=dstack-gateway CONTAINER=dstack-gateway-1 worker-ctl.sh logs | grep -iE 'CertResolver|domain|certificate'"
+  echo "  NAME=$APP_NAME CONTAINER=dstack-gateway-1 worker-ctl.sh logs | grep -iE 'CertResolver|domain|certificate'"
   exit 0
 fi
 
@@ -276,14 +279,17 @@ if [ "$MODE" = deploy ]; then
   echo "=== L2: deploying gateway CVM (LIVE) ==="
   # Replace-on-redeploy: vmm allows duplicate VM names, so remove any existing dstack-gateway first
   # (also frees :443/:9202). Matches the exact name in OUR vmm only — never the workers/kms/MPC node.
-  for old in $(python3 "$VMM_CLI" --url "$VMM_RPC" lsvm 2>/dev/null | grep -Fw "$APP_NAME" \
-      | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'); do
+  # Exact Name-column match: `grep -Fw dstack-gateway` would also match dstack-gateway-v2, and the
+  # other gateway (the previous generation, stopped) is the way back — never removed here.
+  for old in $(python3 "$VMM_CLI" --url "$VMM_RPC" lsvm 2>/dev/null | sed 's/│/|/g' | awk -F'|' -v want="$APP_NAME" '
+      { name=$4; uuid=$2; gsub(/[[:space:]]/,"",name); gsub(/[[:space:]]/,"",uuid)
+        if (name==want && uuid ~ /^[0-9a-f-]{36}$/) print uuid }'); do
     echo "  replacing existing $APP_NAME ($old) — stop + remove..."
     python3 "$VMM_CLI" --url "$VMM_RPC" stop -f "$old" >/dev/null 2>&1 || true
     python3 "$VMM_CLI" --url "$VMM_RPC" remove "$old" >/dev/null 2>&1 || true
   done
-  if ss -ltn 2>/dev/null | grep -qE '(:443|:9202) '; then
-    echo "ERROR: :443 or :9202 still in use after removing old gateway — aborting"; ss -ltn | grep -E '(:443|:9202) '; exit 1
+  if ss -ltn 2>/dev/null | grep -qE '(:443|:9202|:9203|:9206) '; then
+    echo "ERROR: a gateway host port (443/9202/9203/9206) is still in use — another gateway CVM is running; stop it first (worker-ctl.sh stop <name>)"; ss -ltn | grep -E '(:443|:9202|:9203|:9206) '; exit 1
   fi
   GW_HOSTS_MARK=outlayer-tdx-deploy-kms
   gw_hosts_cleanup(){ sudo sed -i "\|$GW_HOSTS_MARK|d" /etc/hosts 2>/dev/null || true; }
@@ -323,13 +329,12 @@ if [ "$MODE" = deploy ]; then
   # NOTE: writing gatewayAppId here only has EFFECT if auth-simple's index.ts is patched (README
   # step 4b) — stock auth-simple's schema drops unknown keys and never returns gatewayAppId to a
   # booting CVM. The soft-check near the top of this script warns if the patch is missing.
-  AUTH_CONFIG="${AUTH_CONFIG:-/home/$NODE_USER/outlayer-kms/auth-config.json}"
   if [ -f "$AUTH_CONFIG" ]; then
     python3 -c 'import json,sys; p,a=sys.argv[1],sys.argv[2]; d=json.load(open(p)); d["gatewayAppId"]=a; json.dump(d,open(p,"w"),indent=2)' "$AUTH_CONFIG" "$APP_ID" \
       && echo "KMS auth-simple: gatewayAppId=$APP_ID set (gateway-enabled CVMs may now register with this gateway)"
-    sudo systemctl restart outlayer-kms-auth.service 2>/dev/null \
-      && echo "  auth-simple reloaded" \
-      || echo "  WARN: reload manually: sudo systemctl restart outlayer-kms-auth.service"
+    sudo systemctl restart "$AUTH_SERVICE" 2>/dev/null \
+      && echo "  auth-simple ($AUTH_SERVICE) reloaded" \
+      || echo "  WARN: reload manually: sudo systemctl restart $AUTH_SERVICE"
   else
     echo "WARN: $AUTH_CONFIG not found — set gatewayAppId=$APP_ID in the KMS auth-config + restart auth-simple manually"
   fi

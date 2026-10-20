@@ -94,7 +94,7 @@ A CVM's `10.0.2.2` is the host's loopback, and qemu runs as `outlayer`, so the l
 lets a CVM reach every host service the operator can: the vmm API (stop any CVM), the gateway
 admin RPC, every other CVM's guest-agent (logs; on dstack < 0.5.12 its env too). `47-cvm-guard.sh`
 tells a CVM apart by cgroup (qemu lives in the vmm service's) and lets it reach only the resolver,
-the KMS (`11001`), the key-provider (`3443`) and the KMS CVM's own webhook/image ports (`3001`,
+the KMS (`11102`), the key-provider (`3443`) and the KMS CVM's own webhook/image ports (`3002`,
 `11008`); the control ports are refused on any local address. Nothing restarts. The jump into the
 guard is re-armed by `/usr/local/sbin/cvm-guard-rearm` on every vmm start (drop-in), after every
 reload our scripts make, and by `cvm-guard.timer`. Log mode first (`--apply`), one boot of every CVM

@@ -11,9 +11,10 @@
 #
 # What a CVM legitimately reaches on the host's loopback — and nothing else:
 #   53      the host resolver (systemd-resolved stub, 127.0.0.53): slirp forwards guest DNS
-#   11001   the KMS RPC (kms.1022.dstack.org -> 10.0.2.2): every CVM, at boot and on key refresh
 #   3443    the gramine key-provider: the KMS CVM seals its root key through it
-#   3001    kms-auth (the boot webhook): the KMS CVM asks it whether an app may boot
+#   3002    kms-auth (the boot webhook, 30-deploy-kms-v2.sh): the KMS CVM asks it whether an app may boot
+#   11102   the KMS RPC (kms-v2.<site>.dstack.outlayer.ai): every CVM, at boot and on key refresh.
+#           Allowed only after the KMS's bootstrap: its onboarding RPC is unauthenticated until then
 #   11008   the KMS image server: the KMS CVM downloads its OS image from it
 # Everything else on 127.0.0.0/8 (and ::1) is refused. The CVM control ports (CONTROL_PORTS)
 # are refused on the host's other local addresses too, so a listener bound on 0.0.0.0 is not
@@ -66,7 +67,7 @@ ANCHOR="-A ufw-before-output -o lo -j ACCEPT"
 ANCHOR6="-A ufw6-before-output -o lo -j ACCEPT"
 MODE="${CVM_GUARD_MODE:-log}"
 UNITS="${CVM_GUARD_UNITS:-outlayer-dstack-vmm.service}"
-LO_ALLOW_TCP="3001,3443,11001,11008"                 # the loopback services of the header
+LO_ALLOW_TCP="3002,3443,11008,11102"      # the loopback services of the header
 # 46-lo-guard.sh's set minus LO_ALLOW_TCP and minus 9202: the gateway RPC/WireGuard port, WAN-open
 # (45-firewall.sh), and the keystores reach it through the host's public IP (seen in log mode).
 CONTROL_PORTS="9200:9201,9203:9999,10000,11000,11002:11007,11009:11010"
@@ -247,12 +248,12 @@ if listens 11000; then
   check "CVM → vmm 127.0.0.1:11000" "$(as_cvm 127.0.0.1 11000)" "$deny_want"
   check "operator → vmm 127.0.0.1:11000" "$(as_op 127.0.0.1 11000)" connected
 fi
-listens 11001 && check "CVM → KMS 127.0.0.1:11001 (allowed)" "$(as_cvm 127.0.0.1 11001)" connected
+listens 11102 && check "CVM → KMS 127.0.0.1:11102 (allowed)" "$(as_cvm 127.0.0.1 11102)" connected
 listens 3443  && check "CVM → key-provider 127.0.0.1:3443 (allowed)" "$(as_cvm 127.0.0.1 3443)" connected
 ss -tlnH 'src 127.0.0.53' | grep -q ':53 ' && check "CVM → resolver 127.0.0.53:53 (allowed)" "$(as_cvm 127.0.0.53 53)" connected
 agent=$(ss -tlnH 'src 127.0.0.1' | awk '{split($4,a,":"); p=a[2]} p>=9200&&p<=9999 {print p; exit}')
 [ -n "$agent" ] && check "CVM → a guest-agent/admin port 127.0.0.1:$agent" "$(as_cvm 127.0.0.1 "$agent")" "$deny_want"
 sleep 1; echo "  last kernel log line:"; journalctl -k --since "-1min" -q -o cat | grep "cvm-guard " | tail -1 | sed 's/^/    /'
 [ "$fails" -eq 0 ] || { echo "SELF-CHECK FAILED: restore the backups above, run /lib/ufw/ufw-init force-reload, then $REARM" >&2; exit 1; }
-[ "$MODE" = log ] && echo "log mode: nothing is refused. Watch: journalctl -k -f | grep cvm-guard  (a CVM boot shows 11001; the KMS CVM's boot shows 3001 and 11008)"
+[ "$MODE" = log ] && echo "log mode: nothing is refused. Watch: journalctl -k -f | grep cvm-guard  (a CVM boot shows 11102; the KMS CVM's boot shows 3002 and 11008)"
 echo "re-arm status any time: $REARM --check; systemctl list-timers cvm-guard.timer"

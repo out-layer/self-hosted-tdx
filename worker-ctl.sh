@@ -201,6 +201,11 @@ case "$cmd" in
   start)      vmm start "$u" ;;
   restart)    stop_vm "$u" || exit 1; vmm start "$u"; echo "restarted $NAME ($u) — re-run '$0 follow' to watch (port changed)" ;;
   set-image)  img="${1:?usage: $0 set-image <cvm-name> <image>}"
+              # The KMS CVM's own key comes from the local key-provider and is bound to its
+              # measurements: on another image it cannot open its sealed root key, and every key
+              # on the node goes with it (docs/cvm-operations.md). A KMS gets a new image only as
+              # a new KMS.
+              case "$NAME" in kms|kms-*) echo "worker-ctl: refusing set-image on '$NAME': a KMS CVM must never change image (it would lose its root key); deploy a new KMS instead" >&2; exit 1 ;; esac
               vmm lsimage 2>/dev/null | grep -q "│ $img " \
                 || { echo "worker-ctl: image '$img' is not in the vmm's image dir (vmm-cli lsimage; 15-add-os-image.sh adds one)" >&2; exit 1; }
               stop_vm "$u" || exit 1

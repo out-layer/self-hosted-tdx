@@ -10,10 +10,11 @@
 # OUTPUT chain.
 #
 # CONTROL_PORTS is what the guard covers, in both modes:
-#   3001         kms-auth (decides which CVM may boot)
+#   3002         kms-auth (decides which CVM may boot)
 #   9200:9999    the vmm's per-CVM host-port pool: gateway admin, guest agents, keystores
 #   10000        the MPC vmm
 #   11000:11010  the outlayer vmm, the KMS RPC, its guest agent, the KMS image server
+#   11102        KMS v2 RPC (30-deploy-kms-v2.sh)
 # Everything else on loopback is left alone. In particular the local PCCS (8081), which
 # `qgs` (uid qgsd) calls for TDX collateral: closing all of loopback would break quote
 # generation for every CVM the first time qgs's collateral cache expires.
@@ -46,7 +47,7 @@ BEGIN="# BEGIN outlayer lo-guard (managed by 46-lo-guard.sh; edit there, not her
 END="# END outlayer lo-guard"
 ANCHOR="-A ufw-before-output -o lo -j ACCEPT"
 ANCHOR6="-A ufw6-before-output -o lo -j ACCEPT"
-CONTROL_PORTS="3001,9200:9999,10000,11000:11010"
+CONTROL_PORTS="3002,9200:9999,10000,11000:11010,11102"
 MODE="${LO_GUARD_MODE:-log}"
 ALLOWED_USERS=(root outlayer mpc)
 DENIED_USERS=(outlayer-api outlayer-api-pg)
@@ -149,7 +150,7 @@ tcp() { # uid port → connected|refused
 }
 fails=0
 check() { if [ "$2" = "$3" ]; then echo "  ok   $1: $2"; else echo "  FAIL $1: $2, want $3"; fails=$((fails+1)); fi; }
-ctl=$(ss -tlnH 'src 127.0.0.1' | awk '{split($4,a,":"); p=a[2]} p==3001||p==10000||(p>=9200&&p<=9999)||(p>=11000&&p<=11010) {print p; exit}')
+ctl=$(ss -tlnH 'src 127.0.0.1' | awk '{split($4,a,":"); p=a[2]} p==3002||p==10000||(p>=9200&&p<=9999)||(p>=11000&&p<=11010) {print p; exit}')
 if [ -n "$ctl" ]; then
   check "nobody → control port $ctl" "$(tcp 65534 "$ctl")" "$([ "$MODE" = log ] && echo connected || echo refused)"
   check "root → control port $ctl" "$(tcp 0 "$ctl")" connected
