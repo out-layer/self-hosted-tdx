@@ -17,9 +17,14 @@
 #   WORKER_DIGEST=sha256:<digest> ./deploy_tdx.sh worker testnet worker0135-1 --version 0.1.35
 # (WORKER_DIGEST carries whichever component's digest you're deploying — worker OR keystore.)
 #
-# The env comes from <component>/.env.<network>-<component>-tdx (gitignored; copy from
+# The env comes from <component>/.env.<stack>-<component>-tdx (gitignored; copy from
 # <component>/<network>-<component>.env.template and fill secrets). The name (3rd arg) becomes
 # the CVM name (APP_NAME) — worker-ctl.sh then targets it by that name.
+# STACK (default: the network) names a deployment that shares a network's contracts but has
+# its own API and secrets, e.g. STACK=beta on testnet: env files .env.beta-*-tdx, measured names
+# outlayer-<component>-beta-<ver>, and worker/docker-compose.beta.yaml when that file exists.
+# ENV_NAME (default: the stack) picks the env file alone, for two CVMs of one stack that differ
+# only in their env: same compose, same measurements.
 # NOTE: the keystore deploy only puts the CVM up + self-submits its DAO registration. The DAO
 # governance (owner-approve measurements + zavodil vote) is driven from the Mac by
 # scripts/deploy_tdx.sh keystore, which keeps the owner/voter keys local.
@@ -45,10 +50,14 @@ NAME="${POSITIONAL_ARGS[2]:-}"
 case "$NETWORK" in testnet|mainnet) ;; *) echo "network must be testnet|mainnet (got '$NETWORK')" >&2; exit 1 ;; esac
 [ -n "$DEPLOY_VERSION" ] || { echo "--version <ver> is required (e.g. --version 0.1.35)" >&2; exit 1; }
 VER="v${DEPLOY_VERSION#v}"   # normalize 0.1.35 / v0.1.35 -> v0.1.35
+STACK="${STACK:-$NETWORK}"
+[[ "$STACK" =~ ^[a-z]+$ ]] || { echo "STACK must be lowercase letters (got '$STACK')" >&2; exit 1; }
+ENV_NAME="${ENV_NAME:-$STACK}"
+[[ "$ENV_NAME" =~ ^[a-z]+$ ]] || { echo "ENV_NAME must be lowercase letters (got '$ENV_NAME')" >&2; exit 1; }
 
 case "$COMPONENT" in
   worker)
-    ENVREL="worker/.env.${NETWORK}-worker-tdx"
+    ENVREL="worker/.env.${ENV_NAME}-worker-tdx"
     [ -f "$HERE/$ENVREL" ] || {
       echo "Missing $ENVREL" >&2
       echo "  cp $HERE/worker/${NETWORK}-worker.env.template $HERE/$ENVREL  and fill the secrets" >&2
@@ -56,19 +65,21 @@ case "$COMPONENT" in
     }
     # COMPOSE_NAME is STABLE per (net, version) -> shared measurements -> approve ONCE per (net,ver).
     # NAME is the per-instance VM label (lsvm / worker-ctl.sh). Add an index for extra instances.
-    COMPOSE_NAME="outlayer-worker-${NETWORK}-${DEPLOY_VERSION#v}"
+    COMPOSE_NAME="outlayer-worker-${STACK}-${DEPLOY_VERSION#v}"
     : "${NAME:=${COMPOSE_NAME}-1}"
-    echo "Deploy WORKER  net=$NETWORK  vm-label=$NAME  measured-name=$COMPOSE_NAME  version=$VER  env=$ENVREL"
+    COMPOSE="$HERE/worker/docker-compose.yaml"
+    [ "$STACK" = "$NETWORK" ] || [ ! -f "$HERE/worker/docker-compose.$STACK.yaml" ] || COMPOSE="$HERE/worker/docker-compose.$STACK.yaml"
+    echo "Deploy WORKER  net=$NETWORK  stack=$STACK  vm-label=$NAME  measured-name=$COMPOSE_NAME  version=$VER  env=$ENVREL  compose=${COMPOSE#$HERE/}"
     if $DRY_RUN; then
-      echo "(dry-run) APP_NAME=$NAME COMPOSE_NAME=$COMPOSE_NAME ENVFILE=$ENVREL $HERE/40-deploy-worker.sh $VER"
+      echo "(dry-run) APP_NAME=$NAME COMPOSE_NAME=$COMPOSE_NAME ENVFILE=$ENVREL COMPOSE=$COMPOSE $HERE/40-deploy-worker.sh $VER"
       exit 0
     fi
-    APP_NAME="$NAME" COMPOSE_NAME="$COMPOSE_NAME" ENVFILE="$ENVREL" "$HERE/40-deploy-worker.sh" "$VER"
+    APP_NAME="$NAME" COMPOSE_NAME="$COMPOSE_NAME" ENVFILE="$ENVREL" COMPOSE="$COMPOSE" "$HERE/40-deploy-worker.sh" "$VER"
     echo "Deployed '$NAME'. First boot needs measurement approval (see docs/cvm-operations.md)."
     echo "Manage:  NAME=$NAME worker-ctl.sh follow | restart | stop"
     ;;
   keystore)
-    ENVREL="keystore/.env.${NETWORK}-keystore-tdx"
+    ENVREL="keystore/.env.${ENV_NAME}-keystore-tdx"
     [ -f "$HERE/$ENVREL" ] || {
       echo "Missing $ENVREL" >&2
       echo "  cp $HERE/keystore/${NETWORK}-keystore.env.template $HERE/$ENVREL  and fill the secrets" >&2
@@ -76,9 +87,9 @@ case "$COMPONENT" in
     }
     # COMPOSE_NAME is STABLE per (net, version) -> shared measurements -> approve ONCE per (net,ver).
     # NAME is the per-instance VM label (lsvm / worker-ctl.sh). Add an index for extra instances.
-    COMPOSE_NAME="outlayer-keystore-${NETWORK}-${DEPLOY_VERSION#v}"
+    COMPOSE_NAME="outlayer-keystore-${STACK}-${DEPLOY_VERSION#v}"
     : "${NAME:=${COMPOSE_NAME}-1}"
-    echo "Deploy KEYSTORE  net=$NETWORK  vm-label=$NAME  measured-name=$COMPOSE_NAME  version=$VER  env=$ENVREL"
+    echo "Deploy KEYSTORE  net=$NETWORK  stack=$STACK  vm-label=$NAME  measured-name=$COMPOSE_NAME  version=$VER  env=$ENVREL"
     # GATEWAY_URL (optional, forwarded from the Mac orchestrator's --gateway-url): when set, the
     # keystore deploys gateway-enabled (joins the dstack-gateway WG mesh -> public HTTPS). Unset ->
     # plain loopback-only keystore. 40-deploy-keystore.sh keys gateway mode off this var.

@@ -4,7 +4,7 @@
 # The one check that must run from outside (31443 admits Cloudflare only) is printed last
 # as a command for another machine.
 set -uo pipefail
-NET="${1:?usage: $0 <testnet|mainnet>}"
+NET="${1:?usage: $0 <testnet|mainnet|beta>}"
 API_HOME="/opt/outlayer-$NET-api"
 set -a; . "$API_HOME/compose.env"; set +a
 P="outlayer-$NET-api"

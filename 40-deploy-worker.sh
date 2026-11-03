@@ -11,7 +11,9 @@ set -euo pipefail
 VERSION="${1:?usage: 40-deploy-worker.sh <version> [vmm-url]}"
 VMM_URL="${2:-${VMM_URL:-http://127.0.0.1:11000}}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-COMPOSE="$HERE/worker/docker-compose.yaml"
+# COMPOSE: the compose to measure; a stack with its own (worker/docker-compose.<stack>.yaml) is
+# passed here by deploy_tdx.sh.
+COMPOSE="${COMPOSE:-$HERE/worker/docker-compose.yaml}"
 # ENVFILE: per-network secrets file (gitignored). Override for testnet/mainnet, e.g.
 #   ENVFILE=worker/.env.mainnet-worker-tdx ./40-deploy-worker.sh v0.1.35
 # Resolved as given (cwd/absolute) if it exists, else relative to this script's dir.
@@ -124,13 +126,15 @@ echo "  agent host port: $AGENT_HOST_PORT (initial; worker-ctl.sh discovers the 
 # register. `scripts/deploy_tdx.sh` does that automatically (owner-signed, clear_others=false,
 # so previously approved sets survive); doing it by hand means running
 # `add_approved_measurements` before the worker can register.
+# CVM_MEMORY (default 1G): a stack whose compose carries the outlayer-core sidecar needs room for
+# it. Like the vCPU count, the memory size changes the measurements.
 DEPLOY_OUT="$(python3 "$VMM_CLI" --url "$VMM_URL" deploy \
   --name "$APP_NAME" \
   --compose "$HERE/worker/app-compose.json" \
   --image "$IMAGE_OS" \
   --env-file "$ENVFILE" \
   --kms-url "$KMS_URL" \
-  --vcpu 2 --memory 1G --disk 1G \
+  --vcpu 2 --memory "${CVM_MEMORY:-1G}" --disk 1G \
   --port "tcp:127.0.0.1:$AGENT_HOST_PORT:8090" 2>&1)"
 echo "$DEPLOY_OUT"
 

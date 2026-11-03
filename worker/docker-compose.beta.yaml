@@ -1,0 +1,107 @@
+# OutLayer worker for the beta stack (STACK=beta: testnet contracts, its own API
+# beta-testnet-api.outlayer.ai), deployed as a dstack CVM on a self-hosted TDX node.
+# The same worker as docker-compose.yaml plus the Defuse Outlayer worker, unmodified, as the
+# `outlayer-core` sidecar. One compose for both beta CVMs (one measurement set):
+# - EXECUTION_ENGINE=defuse-worker: jobs run in outlayer-core over gRPC (DEFUSE_WORKER_PROJECTS
+#   on the coordinator routes them here);
+# - EXECUTION_ENGINE=outlayer (default) with DOWNLOAD_ENABLED=true: the OutLayer engine and the
+#   WasmUrl downloads; outlayer-core stays idle.
+# The outlayer-core digest is written literally: the attestation measures this text, not env
+# values. It is the `outlayer-core` row of the release (attested by out-layer/outlayer).
+# Deploy with CVM_MEMORY=4G (the sidecar's own mem_limit is 3g).
+
+services:
+  worker:
+    image: docker.io/outlayer/near-outlayer-worker@sha256:REPLACE_WITH_RELEASE_DIGEST
+    restart: on-failure:5
+    # A soft stop (`worker-ctl.sh stop`, i.e. `vmm stop` without -f) sends SIGTERM:
+    # the worker takes no new task, finishes the one in hand and exits 0. 85 s covers
+    # one 30 s poll plus p99.9 of a task (35 s on mainnet) and stays under the
+    # guest systemd's 90 s stop timeout.
+    stop_grace_period: 85s
+    environment:
+      API_BASE_URL: ${API_BASE_URL}
+      API_AUTH_TOKEN: ${API_AUTH_TOKEN}
+      NEAR_RPC_URL: ${NEAR_RPC_URL}
+      OFFCHAINVM_CONTRACT_ID: ${OFFCHAINVM_CONTRACT_ID}
+      OPERATOR_ACCOUNT_ID: ${OPERATOR_ACCOUNT_ID}
+      # In TEE mode the operator key is generated at registration; only set for legacy mode.
+      OPERATOR_PRIVATE_KEY: ${OPERATOR_PRIVATE_KEY:-}
+      TEE_MODE: ${TEE_MODE}
+      USE_TEE_REGISTRATION: ${USE_TEE_REGISTRATION}
+      # Signature scheme for the on-chain worker key: ed25519 (default) or ml-dsa-65.
+      WORKER_KEY_TYPE: ${WORKER_KEY_TYPE:-ed25519}
+      COMPILATION_ENABLED: ${COMPILATION_ENABLED}
+      # NOTE: do NOT pass COMPILATION_MODE to an EXECUTION worker. The worker rejects
+      # COMPILATION_MODE=native + EXECUTION_ENABLED=true (a native compiler could exfiltrate
+      # env secrets). This is an execution-only worker (COMPILATION_ENABLED=false), so leave
+      # COMPILATION_MODE unset for an execution-only worker. (The env file may still
+      # carry it harmlessly; the worker only sees what this compose passes.)
+      EXECUTION_ENABLED: ${EXECUTION_ENABLED}
+      # Init account pays gas for worker registration when USE_TEE_REGISTRATION=true.
+      INIT_ACCOUNT_ID: ${INIT_ACCOUNT_ID:-}
+      INIT_ACCOUNT_PRIVATE_KEY: ${INIT_ACCOUNT_PRIVATE_KEY:-}
+      KEYSTORE_BASE_URLS: ${KEYSTORE_BASE_URLS:-}
+      # Routes this node will not run (`<project>:<operation>`, comma-separated) —
+      # the node's geography, declared by the operator; the coordinator hands
+      # those tasks to another worker. Passed through here or the worker never
+      # sees it: this compose lists every variable the container gets.
+      EXECUTE_EXCLUDES: ${EXECUTE_EXCLUDES:-}
+      KEYSTORE_AUTH_TOKEN: ${KEYSTORE_AUTH_TOKEN:-}
+      RUST_LOG: ${RUST_LOG:-info}
+      SAVE_SYSTEM_HIDDEN_LOGS_TO_DEBUG: ${SAVE_SYSTEM_HIDDEN_LOGS_TO_DEBUG:-false}
+      PRINT_WASM_STDERR: ${PRINT_WASM_STDERR:-false}
+      DOWNLOAD_ENABLED: ${DOWNLOAD_ENABLED:-false}
+      EXECUTION_ENGINE: ${EXECUTION_ENGINE:-outlayer}
+      DEFUSE_WORKER_URL: http://outlayer-core:50051
+      ENABLE_EVENT_MONITOR: ${ENABLE_EVENT_MONITOR:-false}
+      NEARDATA_API_URL: ${NEARDATA_API_URL:-}
+      FASTNEAR_API_URL: ${FASTNEAR_API_URL:-}
+      START_BLOCK_HEIGHT: ${START_BLOCK_HEIGHT:-0}
+      WASM_CACHE_MAX_SIZE_MB: ${WASM_CACHE_MAX_SIZE_MB:-100}
+      POLL_TIMEOUT_SECONDS: 30
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock:ro
+
+  # Reachable only on the compose network: no ports, no auth. Its seed is test-mode and signs
+  # nothing of value — the worker refuses components that import `outlayer:crypto`.
+  outlayer-core:
+    image: docker.io/outlayer/near-outlayer-core@sha256:136d78ed98aa4c9aec3390940453f0cf84c25faf96828a6bcc432e25c0366f31
+    restart: on-failure:5
+    # Caged: their code and every guest run here. No capabilities, nothing writable but /tmp, and
+    # no /var/run/dstack.sock — the socket hands out the CVM's KMS-derived keys and TDX quotes.
+    user: "65532:65532"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    # A core dump would hold every concurrent run's stdin.
+    ulimits: { core: 0 }
+    cpus: 1.5
+    environment:
+      # Their executor logs the first 4 KiB of a failed guest's stdin and stdout at WARN (and
+      # every run at TRACE), and on this engine stdin is the envelope: the run's secrets and call
+      # token. The executor crate is silenced whatever the operator's filter says.
+      OUTLAYER__LOG: ${OUTLAYER_CORE_LOG:-info},defuse_outlayer_executor=off
+      OUTLAYER__SEED: ${OUTLAYER_CORE_SEED}
+      OUTLAYER__SERVICE__ALLOW_UNDEPLOYED_CODE: "true"
+      OUTLAYER__TELEMETRY__ENABLED: "false"
+      OUTLAYER__GRPC_SERVER__CONCURRENCY_LIMIT_PER_CONNECTION: "500"
+      OUTLAYER__GRPC__MAX_PENDING_REQUESTS: "500"
+      # Inline wasm travels in the request: well above the stdin limit below
+      OUTLAYER__GRPC__MAX_REQUEST_BYTES: "67108864"
+      # The fleet's time ceiling; each job's own deadline is set per call
+      OUTLAYER__GRPC__REQUEST_HANDLING_TIMEOUT_SECONDS: "300"
+      # Concurrency = budget / per-execution cost
+      OUTLAYER__SERVICE__EXECUTOR__WASM_MEMORY_LIMIT_BYTES: "268435456"
+      OUTLAYER__SERVICE__MAX_WASM_MEMORY_BYTES: "2147483648"
+      OUTLAYER__SERVICE__EXECUTOR__IO_LIMITS__STDIN_BYTES: "10485760"
+      OUTLAYER__SERVICE__EXECUTOR__IO_LIMITS__STDOUT_BYTES: "10485760"
+      # The guest's stderr comes back in a failure message, as on the OutLayer engine
+      OUTLAYER__SERVICE__EXECUTOR__IO_LIMITS__STDERR_BYTES: "1048576"
+      # Storage from the guest is HTTPS: every record costs egress bytes
+      OUTLAYER__SERVICE__EXECUTOR__HTTP__MAX_TOTAL_BYTES: "67108864"
+    expose:
+      - "50051"
+    mem_limit: 3g

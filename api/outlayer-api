@@ -2,9 +2,9 @@
 # outlayer-<net>-api — the only way to operate the API stack on a TDX node. Every call is
 # `docker compose` with this stack's project, compose file and settings, so no command run
 # through it can reach the node's other containers (the key provider, aesmd) or the CVMs.
-# Installed by 50-api.sh as /usr/local/bin/outlayer-testnet-api or outlayer-mainnet-api: the
-# network is read from the name it is called by, so a command never reaches the other
-# network's stack by default. Run as root.
+# Installed by 50-api.sh as /usr/local/bin/outlayer-<stack>-api (testnet, mainnet, beta): the
+# stack is read from the name it is called by, so a command never reaches another stack by
+# default. Run as root.
 #
 #   outlayer-testnet-api deploy            build the coordinator from $API_HOME/src, start/refresh the stack
 #   outlayer-testnet-api logs [svc]        follow logs (default: coordinator)
@@ -27,7 +27,8 @@ set -euo pipefail
 case "$(basename "$0")" in
   outlayer-testnet-api) NET=testnet ;;
   outlayer-mainnet-api) NET=mainnet ;;
-  *) echo "call me as outlayer-testnet-api or outlayer-mainnet-api: the network is in the name" >&2; exit 1 ;;
+  outlayer-beta-api)    NET=beta ;;
+  *) echo "call me as outlayer-testnet-api, outlayer-mainnet-api or outlayer-beta-api: the stack is in the name" >&2; exit 1 ;;
 esac
 API_HOME="/opt/outlayer-$NET-api"
 ENV="$API_HOME/compose.env"

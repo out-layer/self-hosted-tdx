@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install the caged OutLayer API stack (api/compose.yaml) for one network on this TDX node.
+# Install the caged OutLayer API stack (api/compose.yaml) for one stack on this TDX node: a
+# network (testnet, mainnet) or beta (testnet contracts, its own API; api/beta.env).
 # What and why: api/README.md. It never copies a secret and never starts the stack; it
 # prepares everything around them and reports what is still missing.
 #
@@ -20,7 +21,7 @@
 # Then 46-lo-guard.sh must be re-run: it denies loopback to the two users.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-NET="${1:?usage: $0 <testnet|mainnet> [--apply]}"
+NET="${1:?usage: $0 <testnet|mainnet|beta> [--apply]}"
 APPLY=0; [ "${2:-}" = "--apply" ] && APPLY=1
 [ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
 SETTINGS="$HERE/api/$NET.env"
