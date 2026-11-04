@@ -94,7 +94,7 @@ zone add a wildcard A record to the node's public IP:
 
 `gateway.dstack.outlayer.ai` is covered by the wildcard (used as the gateway RPC `MY_URL` /
 `RPC_DOMAIN`). For a different node you change BOTH the subdomain base (`<gateway-domain>`) and the
-target IP — they are this node's values (`dstack.outlayer.ai` → `173.237.9.76`).
+target IP — they are this node's values (`dstack.outlayer.ai` → `<node-ip>`).
 
 ### D. Host resolver — public DNS + no negative caching (the ACME DNS-01 gotcha)
 
@@ -307,7 +307,7 @@ leave both **empty** in the file.
 | Variable | This node | A new node changes it to |
 |---|---|---|
 | `SRV_DOMAIN` | `dstack.outlayer.ai` | the new gateway domain base (must match the DNS wildcard in C) |
-| `PUBLIC_IP` | `173.237.9.76` | the new node's public IP (must match the DNS A record in C) |
+| `PUBLIC_IP` | `<node-ip>` | the new node's public IP (must match the DNS A record in C) |
 | `RPC_DOMAIN` / `MY_URL` | `gateway.dstack.outlayer.ai` | derive from the new `SRV_DOMAIN` (`gateway.<SRV_DOMAIN>`) |
 | `GATEWAY_IMAGE` | the pinned `@sha256:072e…` | unchanged unless you bumped the version (F) |
 | `KMS_URL` | `https://kms.1022.dstack.org:11001` | unchanged (the per-node KMS slirp URL is the same on every node) |
@@ -407,7 +407,7 @@ guest-agent `:8090`).
 
 ### Reference: what worked end-to-end (testnet, 2026-06-19, `node-tdx-dal-2`)
 
-1. Pinned `outlayer/dstack-gateway@sha256:072e…` (0.5.11); DNS `*.dstack.outlayer.ai A 173.237.9.76`
+1. Pinned `outlayer/dstack-gateway@sha256:072e…` (0.5.11); DNS `*.dstack.outlayer.ai A <node-ip>`
    **gray-cloud**; scoped CF token at `/home/outlayer/gateway-cf-token`; host resolver public DNS +
    `Cache=no-negative`; auth-simple patched (`allowAnyApp` + device allowlist), `gatewayAppId` set.
 2. `./40-deploy-gateway.sh deploy` → gateway CVM up; KMS issued the app key (allowAnyApp); image

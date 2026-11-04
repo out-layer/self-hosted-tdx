@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Host firewall (ufw) for the self-hosted TDX node (node-tdx-dal-2, 173.237.9.76).
+# Host firewall (ufw) for the self-hosted TDX node (node-tdx-dal-2, <node-ip>).
 # Default-deny incoming + an explicit allow-list of the ports OutLayer, the NEAR
 # MPC node, and the dstack stack actually need from the WAN. Outgoing stays open.
 #
@@ -30,7 +30,7 @@
 # rules remain harmless (denied ports are denied either way).
 set -euo pipefail
 
-WAN_IF="agge"                 # WAN interface (173.237.9.76/29, default route)
+WAN_IF="agge"                 # WAN interface (<node-ip>/29, default route)
 APPLY=0
 [ "${1:-}" = "--apply" ] && APPLY=1
 
@@ -121,12 +121,12 @@ cat <<'EOF'
 
 --- POST-ENABLE VERIFICATION (run after --apply) -------------------------------
 From OFF-HOST (your laptop):
-  1. SSH still works:                ssh root@173.237.9.76 'echo ok'
-  2. Gateway HTTPS reachable:        curl -sk https://173.237.9.76:443/ -o /dev/null -w '%{http_code}\n'
+  1. SSH still works:                ssh root@<node-ip> 'echo ok'
+  2. Gateway HTTPS reachable:        curl -sk https://<node-ip>:443/ -o /dev/null -w '%{http_code}\n'
   3. Keystore served via gateway:    curl -sk https://<app-id>-8081.dstack.outlayer.ai/ -o /dev/null -w '%{http_code}\n'
-  4. NEAR P2P open:                  nc -vz 173.237.9.76 24567
+  4. NEAR P2P open:                  nc -vz <node-ip> 24567
   5. Denied ports CLOSED (expect timeout/refused, NOT a banner):
-        for p in 11001 11008 3001 3030; do nc -vz -w3 173.237.9.76 $p; done
+        for p in 11001 11008 3001 3030; do nc -vz -w3 <node-ip> $p; done
 
 On the HOST:
   6. CVMs still running:             cd /home/outlayer/meta-dstack/build && curl -s 127.0.0.1:11000/ | head -c1

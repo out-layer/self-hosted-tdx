@@ -1,7 +1,7 @@
 # CVM operations (self-hosted TDX worker)
 
 Day-2 ops for the dstack CVMs running on the self-hosted TDX node. All commands run
-**on the node** (`ssh root@173.237.9.76`) — the control-plane ports are bound to
+**on the node** (`ssh root@<node-ip>`) — the control-plane ports are bound to
 loopback (`127.0.0.1`), not exposed to the WAN.
 
 | What | Address (loopback on the node) |

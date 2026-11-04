@@ -5,8 +5,8 @@ Standing up an **additional execution node** next to one that already runs the f
 short path: **workers are outbound-only**, so a pure worker node needs no gateway, no keystore, and
 no public ingress — only its own dstack control plane (vmm + KMS) and the worker CVM.
 
-Worked example below: `root@23.109.254.164` (`node-tdx-ams-1`) joining a fleet whose first node is
-`root@173.237.9.76`. Substitute your own.
+Worked example below: `root@<new-node>` (`node-tdx-ams-1`) joining a fleet whose first node is
+`root@<first-node>`. Substitute your own.
 
 ## Prerequisites (must already be true on the new box)
 
@@ -65,7 +65,7 @@ own dstack on `:10000` / CID 30000):
 ## 1. User + repo + toolchain
 
 ```bash
-ssh root@23.109.254.164
+ssh root@<new-node>
 
 useradd -m -s /bin/bash outlayer
 usermod -aG sudo,kvm,docker outlayer
@@ -80,7 +80,7 @@ need). `worker/.env.<net>-worker-tdx` is the only secret file a worker node need
 
 ```bash
 # on the Mac, from deploy/self-hosted-tdx/ — same command for every later update
-./sync-node.sh 23.109.254.164        # rsync into /home/outlayer/self-hosted-tdx, owner outlayer
+./sync-node.sh <new-node>        # rsync into /home/outlayer/self-hosted-tdx, owner outlayer
 ```
 
 Secrets on the node are `0600`, owner `outlayer`:
@@ -162,7 +162,7 @@ node:
 ```bash
 cd ~/projects/near-offshore
 ./scripts/deploy_tdx.sh worker testnet testnet-worker-040-1 --version 0.1.40 \
-  --node root@23.109.254.164
+  --node root@<new-node>
 ```
 
 The orchestrator deploys the CVM, reads the 5 TEE measurements from its logs, approves them on

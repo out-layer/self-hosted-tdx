@@ -6,7 +6,7 @@
 # but awkward to type. This wrapper resolves the CVM by name via `lsvm`, drives
 # stop/start/logs by uuid, and auto-discovers the current agent port for log streaming.
 #
-# Run ON THE NODE (ssh root@173.237.9.76). Examples:
+# Run ON THE NODE (ssh root@<node-ip>). Examples:
 #   ./worker-ctl.sh status                 # lsvm
 #   ./worker-ctl.sh logs                   # last 200 worker app-log lines (snapshot)
 #   ./worker-ctl.sh follow                 # stream worker app logs (Ctrl-C to stop)

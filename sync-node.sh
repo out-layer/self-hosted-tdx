@@ -3,7 +3,7 @@
 # git checkout of this repo (no repo key on the node, no .git/.idea/secrets on the wire), so this
 # rsync IS the update path; run it from the Mac after every change here.
 #
-#   ./sync-node.sh <host>            # e.g. ./sync-node.sh 23.109.254.164   (ssh as root)
+#   ./sync-node.sh <host>            # e.g. ./sync-node.sh <node-ip>   (ssh as root)
 #   ./sync-node.sh <host> --dry-run  # show what would change, touch nothing
 #
 # Never deletes on the node (the node-only files — worker/.env.*, keystore/.env.*, the auth config

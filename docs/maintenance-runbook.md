@@ -1,4 +1,4 @@
-# Maintenance runbook — self-hosted TDX node (`173.237.9.76`)
+# Maintenance runbook — self-hosted TDX node (`<node-ip>`)
 
 What to do for planned changes, and — critically — **in what order**, so attestation and
 custody don't break. Read [node-hardening.md](node-hardening.md) first (why the host is frozen).

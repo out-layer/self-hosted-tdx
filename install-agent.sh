@@ -18,8 +18,8 @@
 #       --portal-repo ~/projects/attestation-portal --portal root@<portal-server>
 #
 # Add a node to an existing fleet by cloning a healthy node's binary (fast, no build):
-#   ./install-agent.sh --node root@23.109.254.164 --node-id node-tdx-ams-1 \
-#       --from-node root@173.237.9.76 --token-from root@173.237.9.76 --portal root@138.201.58.122
+#   ./install-agent.sh --node root@<new-node> --node-id node-tdx-ams-1 \
+#       --from-node root@<first-node> --token-from root@<first-node> --portal root@<portal-host>
 #
 # Options:
 #   --node <ssh>          REQUIRED. SSH target of the TDX node (lands as root).
