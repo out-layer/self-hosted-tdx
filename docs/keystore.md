@@ -61,7 +61,15 @@ into the measured compose — plaintext secrets never enter the app-compose. NEV
 file. Rule: **no inline `# comment` after a value** (the parser takes the whole line after `=`).
 
 Fill, per network:
-- `NEAR_RPC_URL` — `https://rpc.<net>.fastnear.com?apiKey=<RPC_API_KEY>` (the apiKey is a secret).
+- `NEAR_RPC_API_KEY` — the FastNEAR RPC key (a secret). For `dao.outlayer.<net>` the keystore
+  reads the chain only through `rpc.<net>.fastnear.com`, about `worker.outlayer.<net>` and
+  `outlayer.<net>`, all fixed in its code: the env passed through the KMS is not measured, and an
+  RPC or account chosen at deploy would decide who opens a TEE session and which access
+  conditions apply. It refuses to start when `NEAR_RPC_URL` is set, or when
+  `OPERATOR_ACCOUNT_ID` / `NEAR_CONTRACT_ID` name anything else. Without the key it starts
+  against the same host unkeyed and warns. Changing the RPC provider of a production DAO is a
+  keystore release. Any other DAO (a test stand) takes `NEAR_RPC_URL`, `OPERATOR_ACCOUNT_ID` and
+  `NEAR_CONTRACT_ID` from the env.
 - `INIT_ACCOUNT_ID` / `INIT_ACCOUNT_PRIVATE_KEY` — the account that self-submits
   `submit_keystore_registration` on boot and pays its gas (full-access ed25519 key).
 - `ALLOWED_WORKER_TOKEN_HASHES` / `ALLOWED_COORDINATOR_TOKEN_HASHES` — `sha256` of the bearer token

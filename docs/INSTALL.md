@@ -24,7 +24,7 @@ Fill these for the new server before you start; they thread through the steps be
 | Gateway domain base | `gateway/gateway.env` `SRV_DOMAIN` | e.g. `dstack.<you>.ai`; needs the wildcard DNS below |
 | DNS `*.<SRV_DOMAIN>` A → IP | Cloudflare | **gray-cloud / DNS-only** (proxy breaks TDX attest). `gateway.md` Prereq C |
 | Cloudflare DNS-01 token | `/home/outlayer/gateway-cf-token` (chmod 600) | scoped Zone:DNS:Edit + Zone:Read. `gateway.md` Prereq E |
-| FastNEAR RPC API key | keystore env `NEAR_RPC_URL` | `rpc.<net>.fastnear.com?apiKey=…` |
+| FastNEAR RPC API key | keystore env `NEAR_RPC_API_KEY` | the key alone; the host is fixed in the keystore's code |
 | NEAR accounts + keys | keystore env, orchestrator | `worker.outlayer.<net>`, `dao.outlayer.<net>`, `init-keystore.outlayer.<net>`, the DAO signer key. Same accounts as the OutLayer project; only the per-node node-IP/domain change |
 | KMS admin token / auth-simple | README Step 4 | per-node KMS secrets |
 

@@ -25,7 +25,13 @@ services:
       SERVER_HOST: ${SERVER_HOST}
       SERVER_PORT: ${SERVER_PORT}
       NEAR_NETWORK: ${NEAR_NETWORK}
+      # For dao.outlayer.near / dao.outlayer.testnet the keystore reads the chain only through the
+      # FastNEAR host fixed in its code, about the operator account and secrets contract fixed
+      # there: NEAR_RPC_URL must stay empty, NEAR_RPC_API_KEY carries the key, and
+      # OPERATOR_ACCOUNT_ID / NEAR_CONTRACT_ID may only be empty or repeat the fixed values.
+      # Any other DAO takes NEAR_RPC_URL / OPERATOR_ACCOUNT_ID / NEAR_CONTRACT_ID from the env.
       NEAR_RPC_URL: ${NEAR_RPC_URL}
+      NEAR_RPC_API_KEY: ${NEAR_RPC_API_KEY}
       OFFCHAINVM_CONTRACT_ID: ${OFFCHAINVM_CONTRACT_ID}
       NEAR_CONTRACT_ID: ${NEAR_CONTRACT_ID}
       ALLOWED_WORKER_TOKEN_HASHES: ${ALLOWED_WORKER_TOKEN_HASHES}
