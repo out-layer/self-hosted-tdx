@@ -130,18 +130,22 @@ clean-DNS reboot. It prints the keystore URL (`KEYSTORE_URL=…`) at the end.
 
 ---
 
-## Govern — approve measurements + vote (Path B / what the orchestrator automates)
+## Govern — the members vote for this keystore's key (what the orchestrator automates)
 
-On first boot the keystore gets its KMS app key + a TDX quote and self-submits its DAO registration
-(logs `Proposal ID: N`), then **stalls on "measurements not approved"** (expected — the CVM stays up).
-As the DAO **owner/signer**, on `dao.outlayer.<net>`:
-1. Harvest the keystore's 5 measurements from its logs (`worker-ctl.sh ... logs`).
-2. Approve those measurements (owner) and vote the proposal through:
+On first boot the keystore gets its KMS app key and a TDX quote and submits its DAO registration
+with the quote's boot event log (it logs `Using keystore public key: K` and `Proposal ID: N`).
+The DAO replays the log against the quote and records which compose and which instance
+registers; nothing is approved beforehand.
+
+1. Read `K` and `N` from the keystore's own log, and its `instance_id` and `compose_hash` from
+   its guest agent, on the node (`worker-ctl.sh ... logs`; `scripts/deploy_tdx.sh` does both and
+   refuses a registration on chain that is not this CVM's).
+2. DAO members vote **for that key** — the vote is refused on a registration for another key:
    ```bash
    near contract call-function as-transaction dao.outlayer.testnet \
-     vote json-args '{"proposal_id":<N>,"approve":true}' \
+     vote json-args '{"proposal_id":<N>,"approve":true,"public_key":"<K>"}' \
      prepaid-gas '100.0 Tgas' attached-deposit '0 NEAR' \
-     sign-as zavodil.testnet network-config testnet sign-with-legacy-keychain send
+     sign-as <member> network-config testnet sign-with-legacy-keychain send
    ```
 Once the proposal passes, the keystore pulls its MPC-CKD master and logs **"Keystore is now ready to
 serve requests."** On **testnet** the single trusted-signer vote is enough; on **mainnet** the DAO may
