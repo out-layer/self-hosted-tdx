@@ -130,17 +130,24 @@ clean-DNS reboot. It prints the keystore URL (`KEYSTORE_URL=…`) at the end.
 
 ---
 
-## Govern — the members vote for this keystore's key (what the orchestrator automates)
+## Govern — the DAO approves the build once, the members vote for every instance
 
-On first boot the keystore gets its KMS app key and a TDX quote and submits its DAO registration
-with the quote's boot event log (it logs `Using keystore public key: K` and `Proposal ID: N`).
-The DAO replays the log against the quote and records which compose and which instance
-registers; nothing is approved beforehand.
+A keystore registers with its TDX quote and the quote's boot event log. The DAO replays the log
+against the quote and takes the registration only for a build it approved: the guest OS (MRTD,
+RTMR0–2) and the compose hash, both the same for every instance of a release. On boot the keystore
+asks the DAO first; an unapproved build logs `this build is not approved by the DAO yet` with
+its compose hash and OS measurements, submits nothing and stops.
 
-1. Read `K` and `N` from the keystore's own log, and its `instance_id` and `compose_hash` from
-   its guest agent, on the node (`worker-ctl.sh ... logs`; `scripts/deploy_tdx.sh` does both and
-   refuses a registration on chain that is not this CVM's).
-2. DAO members vote **for that key** — the vote is refused on a registration for another key:
+1. **The build, once per release** (the OS once per dstack version and platform). DAO members
+   propose and vote `ApproveCompose {compose_hash}` and, for a new OS, `ApproveOsImage {mrtd,
+   rtmr0, rtmr1, rtmr2}`; each executes after the DAO's delay. `scripts/deploy_tdx.sh` reads both
+   values from the CVM's guest agent, proposes what is missing and prints the votes. Restart the
+   keystore afterwards (the same CVM; a new deploy is a new instance): `--resume` does.
+2. **The instance.** The keystore logs `Using keystore public key: K` and `Proposal ID: N`. Read
+   `K` and `N` from the current boot of its own log, and its measurements, `instance_id` and
+   `compose_hash` from its guest agent, on the node (`scripts/deploy_tdx.sh` does, and refuses a
+   registration on chain that is not this CVM's). DAO members vote **for that key** — the vote is
+   refused on a registration for another key:
    ```bash
    near contract call-function as-transaction dao.outlayer.testnet \
      vote json-args '{"proposal_id":<N>,"approve":true,"public_key":"<K>"}' \
