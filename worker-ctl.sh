@@ -153,7 +153,8 @@ stop_vm() {
 # (`<net>-keystore-*`) count: each network has its own DAO, and a key of the other network would
 # make the script refuse the run. The key is the last "Using keystore public key" line of the
 # instance's log: a CVM restarted by the deploy orchestrator logs one key per boot, and only the
-# last one is the key the instance registered and serves with.
+# last one is the key the instance registered and serves with. The whole log is read: the line is
+# written once, at boot, and a keystore running for days has far more lines after it.
 keystore_keys() {
   local net="$1" rows name status uuid p key keys="" notes="" var unreadable=0
   case "$net" in testnet|mainnet) : ;; *) echo "usage: $0 keystore-keys <testnet|mainnet>" >&2; return 1 ;; esac
@@ -167,9 +168,9 @@ keystore_keys() {
     p=$(agent_port "$uuid")
     [ -n "${p:-}" ] || { notes+="# $name: RUNNING but no agent port — its key could not be read"$'\n'; unreadable=1; continue; }
     # `|| true`: under set -e / pipefail a log without the line (grep exit 1) must not end the loop.
-    key=$(curl -s "http://127.0.0.1:$p/logs/dstack-keystore-1?text=true&bare=true&tail=20000" \
+    key=$(curl -s "http://127.0.0.1:$p/logs/dstack-keystore-1?text=true&bare=true&tail=100000000" \
       | grep -oE 'Using keystore public key: [a-z0-9-]+:[A-Za-z0-9]+' | tail -1 | sed 's/.*: //' || true)
-    if [ -n "$key" ]; then notes+="# $name: $key"$'\n'; keys="${keys:+$keys }$key"; else notes+="# $name: RUNNING but no 'Using keystore public key' line in its log (older keystore, or the line scrolled out) — its key could not be read"$'\n'; unreadable=1; fi
+    if [ -n "$key" ]; then notes+="# $name: $key"$'\n'; keys="${keys:+$keys }$key"; else notes+="# $name: RUNNING but no 'Using keystore public key' line in its log (an older keystore, or a log the container runtime truncated) — its key could not be read"$'\n'; unreadable=1; fi
   done <<< "$rows"
   # A running keystore whose key could not be read gets NO export line: the revoke script keeps
   # exactly the keys in KEEP_*, so an export line missing a live key is a line that revokes it.
