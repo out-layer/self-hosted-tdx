@@ -69,11 +69,57 @@ echo "  verify (on a trusted machine): gh attestation verify oci://docker.io/out
 RENDERED="$(mktemp "${TMPDIR:-/tmp}/outlayer-worker-compose.XXXXXX")"
 sed "s|image: docker.io/outlayer/near-outlayer-worker@sha256:.*|image: docker.io/outlayer/near-outlayer-worker@$DIGEST|" "$COMPOSE" > "$RENDERED"
 
+# The coordinator and keystore addresses are MEASURED: written into the compose as literals, so
+# they are in its hash (the app id, and RTMR3) and an approved build talks to exactly them. Left
+# in the env, anyone could re-encrypt that env with other addresses (the env key is public) and
+# put a relay between the worker and its peers without changing a measurement. The env passed to
+# the CVM (SEALED_ENV) carries everything else, and these two names are not in its allowed_envs.
+# keystore_urls.sh keeps writing KEYSTORE_BASE_URLS into the env file; it is read from there.
+MEASURED_ENV="API_BASE_URL KEYSTORE_BASE_URLS"
+SEALED_ENV="$(mktemp "${TMPDIR:-/tmp}/outlayer-worker-env.XXXXXX")"
+chmod 600 "$SEALED_ENV"
+trap 'rm -f "$RENDERED" "$SEALED_ENV"' EXIT   # replaced by cleanup() below
+python3 -I - "$ENVFILE" "$RENDERED" "$SEALED_ENV" $MEASURED_ENV <<'PY'
+import re, sys
+envf, compose, sealed, *names = sys.argv[1:]
+vals, rest = {}, []
+for line in open(envf):
+    if re.match(r"\s*export\s+(" + "|".join(names) + r")\s*=", line):
+        sys.exit("write " + line.split("=")[0].split()[-1] + "=… without `export`: the address is read from that line")
+    m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$", line.rstrip("\n"))
+    if m and m.group(1) in names:
+        v = m.group(2).strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        vals[m.group(1)] = v
+        continue
+    rest.append(line)
+if not vals.get("API_BASE_URL"):
+    sys.exit("API_BASE_URL is missing in the env file")
+for n in names:
+    v = vals.get(n, "")
+    if any(c in v for c in '"\\$\n#') or any(c.isspace() for c in v):
+        sys.exit(f"{n}: a quote, backslash, $, # or whitespace cannot go into the compose")
+    for u in (x.strip() for x in v.split(",")):
+        if u and not u.startswith("https://"):
+            sys.exit(f"{n}: {u} is not https:// (the worker refuses it in a TEE)")
+text = open(compose).read()
+for n in names:
+    pat = re.compile(r"^(\s*" + n + r":\s*)\$\{" + n + r"(?::-)?\}\s*$", re.M)
+    text, k = pat.subn(lambda m: m.group(1) + '"' + vals.get(n, "") + '"', text)
+    if k != 1:
+        sys.exit(f"{n}: expected one ${{{n}}} line in the compose, found {k}")
+open(compose, "w").write(text)
+open(sealed, "w").writelines(rest)
+for n in names:
+    print(f"  measured {n}={vals.get(n, '')}")
+PY
+
 # --- temporary /etc/hosts so the HOST-side KMS encryption can reach $KMS_HOST (see KMS_URL note).
 #     Removed before the CVM boots so the guest resolves $KMS_HOST -> 10.0.2.2 (host), not 127.0.0.1.
 HOSTS_MARK="outlayer-tdx-deploy-kms"
 hosts_cleanup() { sudo sed -i "\|${HOSTS_MARK}|d" /etc/hosts 2>/dev/null || true; }
-cleanup() { hosts_cleanup; rm -f "$RENDERED"; }
+cleanup() { hosts_cleanup; rm -f "$RENDERED" "$SEALED_ENV"; }
 trap cleanup EXIT
 if ! grep -qF "$HOSTS_MARK" /etc/hosts; then
   echo "127.0.0.1 $KMS_HOST # $HOSTS_MARK" | sudo tee -a /etc/hosts >/dev/null
@@ -86,7 +132,7 @@ python3 "$VMM_CLI" --url "$VMM_URL" compose \
   --docker-compose "$RENDERED" \
   --kms \
   --public-logs --no-instance-id \
-  --env-file "$ENVFILE" \
+  --env-file "$SEALED_ENV" \
   --output "$HERE/worker/app-compose.json"
 
 # Replace-on-redeploy: vmm ALLOWS duplicate VM names, so re-running with the same name would
@@ -128,7 +174,7 @@ DEPLOY_OUT="$(python3 "$VMM_CLI" --url "$VMM_URL" deploy \
   --name "$APP_NAME" \
   --compose "$HERE/worker/app-compose.json" \
   --image "$IMAGE_OS" \
-  --env-file "$ENVFILE" \
+  --env-file "$SEALED_ENV" \
   --kms-url "$KMS_URL" \
   --vcpu 2 --memory 1G --disk 1G \
   --port "tcp:127.0.0.1:$AGENT_HOST_PORT:8090" 2>&1)"

@@ -7,6 +7,8 @@
 #   (encrypted by the per-node KMS + embedded as a ciphertext blob). The compose text
 #   keeps only ${VAR} references, so plaintext secrets never enter the measured compose;
 #   dstack decrypts the env inside the CVM and docker-compose substitutes at runtime.
+# - API_BASE_URL and KEYSTORE_BASE_URLS are the exception: 40-deploy-worker.sh writes their values
+#   into the rendered compose as literals, so the addresses the worker talks to are measured.
 # - the worker is outbound-only (polls the coordinator); no inbound ports.
 # - /var/run/dstack.sock is provided by dstack inside the CVM (TDX quotes).
 # - single worker service, no compiler sidecar (COMPILATION_ENABLED=false); no docker.sock —

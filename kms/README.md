@@ -75,6 +75,12 @@ drops 11001 on the WAN, but a policy that only holds while a port stays closed i
 mistake from failing. The device allowlist makes the KMS refuse foreign hardware even if the
 port is exposed.
 
+**Checked before every deploy.** `tools/check-kms-binding.sh` (on the node, read-only) holds the
+invariant: the v2 boot webhook runs, `devices` equals `kms.devices` (this node only),
+`kms.allowAnyDevice` is false, the code carries the OutLayer device check, and the webhook listens
+on loopback only. `scripts/deploy_tdx.sh` runs it first and deploys nothing on a node that fails it,
+so a node whose KMS stopped refusing foreign hardware is found at its next deploy, not in an audit.
+
 **Verify with a boot.** A wrong entry in `devices` shows up when a CVM next boots (running CVMs never
 re-authenticate). A wrong entry in `kms.devices` shows up at once: the KMS re-asks auth-simple on
 **every key request** (`ensure_self_allowed`, `enforce_self_authorization = true` upstream default),
