@@ -19,6 +19,8 @@
 #   outlayer-testnet-api maintenance       the switch as stored: enabled, note, changed_at
 #   outlayer-testnet-api gc                build cache older than a week and this stack's
 #                                          dangling images; never another stack's or a container
+#   outlayer-testnet-api nginx             apply api/nginx-<net>.conf from the node's runbook tree
+#                                          (sync-node.sh): checked, reloaded, rolled back if refused
 #
 # The day-to-day line (in `screen -S <net>-api`):
 #   cd /opt/outlayer-testnet-api/src && git pull && outlayer-testnet-api deploy && outlayer-testnet-api logs
@@ -84,6 +86,25 @@ case "$cmd" in
     admin PUT /admin/maintenance "$body" ;;
   resume)      admin PUT /admin/maintenance '{"enabled": false}' ;;
   maintenance) admin GET /admin/maintenance ;;
+  nginx)
+    # The config sync-node.sh brought, made live without a restart. Written over the live file in
+    # place: the container sees it through a bind mount of that one file, and a file replaced by
+    # a new one (a new inode) would stay invisible to it, to a reload and to a restart alike.
+    src="/home/outlayer/self-hosted-tdx/api/nginx-$NET.conf"; live="$API_HOME/nginx/nginx.conf"
+    [ -f "$src" ] || { echo "$src missing: sync the node first (sync-node.sh)" >&2; exit 1; }
+    if cmp -s "$src" "$live"; then echo "nginx config: up to date"; exit 0; fi
+    diff -u "$live" "$src" | head -60 || true
+    bak="$live.bak-$(date -u +%Y%m%dT%H%M%S)"; cp -p "$live" "$bak"
+    cat "$src" > "$live"
+    if dc exec -T nginx nginx -t; then
+      dc exec -T nginx nginx -s reload
+      echo "nginx: the new config is live (the previous one kept as $bak)"
+    else
+      cat "$bak" > "$live"
+      echo "nginx refused the new config: the live one is restored, nothing reloaded" >&2
+      exit 1
+    fi
+    ;;
   gc)
     # The only cleanup allowed on a TDX node: never `docker system/image prune` without a filter
     # (the key provider and aesmd the CVMs need are containers on the same daemon).

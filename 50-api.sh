@@ -87,8 +87,16 @@ run install -d -m 700 -o 2100 -g 2100 "$API_HOME/data/redis" "$API_HOME/data/was
 step "4. compose files"
 put() { # src dst mode owner:group
   if [ -f "$2" ] && cmp -s "$1" "$2"; then echo "  $2: up to date"; return; fi
-  if [ -f "$2" ]; then diff -u "$2" "$1" | sed 's/^/    /' | head -40 || true; fi
-  run install -m "$3" -o "${4%:*}" -g "${4#*:}" "$1" "$2"
+  if [ -f "$2" ]; then
+    diff -u "$2" "$1" | sed 's/^/    /' | head -40 || true
+    # In place, not replaced: nginx.conf is bind-mounted as one file, and a container keeps the
+    # inode it was started with — a new file would never reach it. (nginx.conf itself: then
+    # `outlayer-<net>-api nginx`, which checks and reloads.)
+    run sh -c 'cat "$1" > "$2"' put "$1" "$2"
+    run chmod "$3" "$2"; run chown "$4" "$2"
+  else
+    run install -m "$3" -o "${4%:*}" -g "${4#*:}" "$1" "$2"
+  fi
 }
 compose_env=$(mktemp); trap 'rm -f "$compose_env"' EXIT
 { cat "$SETTINGS"; echo "API_PUBLIC_IP=$PUBLIC_IP"; } > "$compose_env"

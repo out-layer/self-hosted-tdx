@@ -32,3 +32,7 @@ rsync -a -v "$@" \
 if $DRY; then echo "dry-run: nothing changed on $HOST"; exit 0; fi
 ssh "root@$HOST" "chown -R '$NODE_USER:$NODE_USER' '$DEST' && find '$DEST' -type f \\( -name '.env*' -o -name '*.env' \\) ! -name '*.template' ! -name '*.example' -exec chmod 600 {} +"
 echo "synced -> root@$HOST:$DEST (owner $NODE_USER)"
+# The API's live nginx config is installed from this tree, never synced into place: a config that
+# differs from the live one is named here, with the command that applies it.
+ssh "root@$HOST" "for net in testnet mainnet; do live=/opt/outlayer-\$net-api/nginx/nginx.conf; [ -f \$live ] || continue; \
+  cmp -s '$DEST'/api/nginx-\$net.conf \$live || echo \"  ! the \$net API's live nginx config differs from api/nginx-\$net.conf: apply it on the node with outlayer-\$net-api nginx\"; done"
