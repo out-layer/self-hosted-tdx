@@ -103,6 +103,7 @@ compose_env=$(mktemp); trap 'rm -f "$compose_env"' EXIT
 put "$HERE/api/compose.yaml" "$API_HOME/compose.yaml" 644 root:root
 put "$compose_env" "$API_HOME/compose.env" 644 root:root
 put "$NGINX_CONF" "$API_HOME/nginx/nginx.conf" 640 root:2100
+echo "  (nginx serves the file it read at its last reload: then outlayer-$NET-api nginx, which checks and reloads)"
 
 step "5. source checkout $API_HOME/src"
 if [ -d "$API_HOME/src/.git" ]; then

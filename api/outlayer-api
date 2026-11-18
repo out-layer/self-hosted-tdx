@@ -90,18 +90,22 @@ case "$cmd" in
     # The config sync-node.sh brought, made live without a restart. Written over the live file in
     # place: the container sees it through a bind mount of that one file, and a file replaced by
     # a new one (a new inode) would stay invisible to it, to a reload and to a restart alike.
+    # A file already equal to the tree (50-api.sh writes it too) is still checked and reloaded:
+    # the file on disk is not what nginx serves until a reload, so "up to date" is never the end.
     src="/home/outlayer/self-hosted-tdx/api/nginx-$NET.conf"; live="$API_HOME/nginx/nginx.conf"
     [ -f "$src" ] || { echo "$src missing: sync the node first (sync-node.sh)" >&2; exit 1; }
-    if cmp -s "$src" "$live"; then echo "nginx config: up to date"; exit 0; fi
-    diff -u "$live" "$src" | head -60 || true
-    bak="$live.bak-$(date -u +%Y%m%dT%H%M%S)"; cp -p "$live" "$bak"
-    cat "$src" > "$live"
+    bak=""
+    if ! cmp -s "$src" "$live"; then
+      diff -u "$live" "$src" | head -60 || true
+      bak="$live.bak-$(date -u +%Y%m%dT%H%M%S)"; cp -p "$live" "$bak"
+      cat "$src" > "$live"
+    fi
     if dc exec -T nginx nginx -t; then
       dc exec -T nginx nginx -s reload
-      echo "nginx: the new config is live (the previous one kept as $bak)"
+      echo "nginx: reloaded with the tree's config${bak:+ (the previous one kept as $bak)}"
     else
-      cat "$bak" > "$live"
-      echo "nginx refused the new config: the live one is restored, nothing reloaded" >&2
+      [ -n "$bak" ] && cat "$bak" > "$live"
+      echo "nginx refused the config: ${bak:+the previous one is restored, }nothing reloaded" >&2
       exit 1
     fi
     ;;
